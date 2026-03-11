@@ -5,6 +5,17 @@
 包括：预处理 → 特征提取 → 分类 → 评估
 """
 
+from classification.svm_classifier import (
+    train_svm_classifier,
+    evaluate_model,
+    plot_confusion_matrix,
+)
+from feature_extraction.wavelet_feature import (
+    extract_wavelet_energy_features,
+    normalize_features,
+)
+from feature_extraction.csp_feature import extract_csp_features, visualize_csp_topo
+from pretreatment.complete_preprocessing import complete_preprocessing_pipeline
 import numpy as np
 import mne
 from pathlib import Path
@@ -12,18 +23,6 @@ import sys
 
 # 添加项目路径
 sys.path.append(str(Path(__file__).parent))
-
-from pretreatment.complete_preprocessing import complete_preprocessing_pipeline
-from feature_extraction.csp_feature import extract_csp_features, visualize_csp_topo
-from feature_extraction.wavelet_feature import (
-    extract_wavelet_energy_features,
-    normalize_features,
-)
-from classification.svm_classifier import (
-    train_svm_classifier,
-    evaluate_model,
-    plot_confusion_matrix,
-)
 
 
 def single_subject_pipeline(subject_id="A01T", data_root=None):
@@ -86,7 +85,8 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
 
     # 可视化 CSP 拓扑图
     try:
-        visualize_csp_topo(csp, epochs, save_path=f"./{subject_id}_csp_topo.png")
+        visualize_csp_topo(
+            csp, epochs, save_path=f"./{subject_id}_csp_topo.png")
     except Exception as e:
         print(f"⚠️  无法绘制 CSP 拓扑图：{e}")
 
