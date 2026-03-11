@@ -288,12 +288,44 @@ if __name__ == "__main__":
     print("  - 特征类型：能量特征")
     print("  - 归一化：Z-score 标准化")
     
-    # 可视化测试代码（取消注释可运行测试）
-    """
-    print("\n--- 运行绘图测试 ---")
-    fs = 250
-    t = np.linspace(0, 1, fs)
-    # 生成包含 5Hz, 15Hz, 40Hz 的混合测试信号
-    test_signal = np.sin(2 * np.pi * 5 * t) + 0.5 * np.sin(2 * np.pi * 15 * t) + 0.2 * np.sin(2 * np.pi * 40 * t)
-    plot_wavelet_decomposition(test_signal, sfreq=fs, wavelet='db4', level=4, save_path='./test_wavelet.png')
-    """
+    # 可视化测试代码（实际运行）
+    print("\n" + "=" * 80)
+    print("运行可视化测试...")
+    print("=" * 80)
+    
+    try:
+        print("\n--- 生成测试信号 ---")
+        fs = 250
+        t = np.linspace(0, 1, fs)
+        # 生成包含 5Hz, 15Hz, 40Hz 的混合测试信号
+        test_signal = np.sin(2 * np.pi * 5 * t) + \
+                      0.5 * np.sin(2 * np.pi * 15 * t) + \
+                      0.2 * np.sin(2 * np.pi * 40 * t)
+        
+        print(f"✅ 测试信号生成完成：{len(test_signal)} 个采样点")
+        print(f"   - 包含频率成分：5Hz, 15Hz, 40Hz")
+        print(f"   - 采样率：{fs} Hz")
+        print(f"   - 时长：1 秒")
+        
+        print("\n--- 绘制小波分解图 ---")
+        plot_wavelet_decomposition(
+            test_signal, 
+            sfreq=fs, 
+            wavelet='db4', 
+            level=4, 
+            save_path='./test_wavelet.png'
+        )
+        
+        print("\n✅ 测试完成！查看生成的图片：test_wavelet.png")
+        print("   图片将显示:")
+        print("   - 原始测试信号")
+        print("   - A4 近似系数 (0-7.8 Hz)")
+        print("   - D4 细节系数 (7.8-15.6 Hz)")
+        print("   - D3 细节系数 (15.6-31.2 Hz)")
+        print("   - D2 细节系数 (31.2-62.5 Hz)")
+        print("   - D1 细节系数 (62.5-125 Hz)")
+        
+    except Exception as e:
+        print(f"\n❌ 测试过程中发生错误：{e}")
+        import traceback
+        traceback.print_exc()

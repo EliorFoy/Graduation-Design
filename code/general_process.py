@@ -195,13 +195,21 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
 
     # 绘制混淆矩阵（使用融合特征）
     try:
+        from sklearn.metrics import confusion_matrix
+        
         y_pred = clf_fused.predict(X_fused)
         class_names = ["左手", "右手", "双脚", "舌头"]
+        
+        # 计算混淆矩阵
+        cm = confusion_matrix(y, y_pred)
+        
+        # 绘制混淆矩阵图
         plot_confusion_matrix(
-            metrics["confusion_matrix"],
+            cm,
             class_names=class_names,
             save_path=f"./{subject_id}_confusion_matrix.png",
         )
+        print(f"✅ 混淆矩阵已保存：./{subject_id}_confusion_matrix.png")
     except Exception as e:
         print(f"⚠️  无法绘制混淆矩阵：{e}")
 
@@ -237,7 +245,66 @@ def demo_usage():
 
 
 if __name__ == "__main__":
+    # 方式 1: 只显示使用说明（快速查看）
     demo_usage()
-
-    # 示例：处理 A01T 被试（需要实际数据）
-    # results = single_subject_pipeline('A01T')
+    
+    # 方式 2: 实际运行完整流程（需要数据文件）
+    print("\n" + "=" * 80)
+    print("开始实际运行...")
+    print("=" * 80)
+    
+    try:
+        # 处理 A01T 被试（训练数据）
+        results = single_subject_pipeline('A01T')
+        
+        if results is not None:
+            print("\n" + "=" * 80)
+            print("✅ 流程执行完成！结果汇总:")
+            print("=" * 80)
+            
+            # 显示基本信息
+            print(f"\n📊 被试：{results['subject_id']}")
+            print(f"📈 最终试次数：{len(results['epochs'])}")
+            print(f"🔌 通道数：{len(results['epochs'].ch_names)}")
+            
+            # 显示特征形状
+            print(f"\n特征维度:")
+            print(f"  - CSP 特征：{results['X_csp'].shape}")
+            print(f"  - 小波特征：{results['X_wavelet'].shape}")
+            print(f"  - 融合特征：{results['X_fused'].shape}")
+            
+            # 显示分类性能
+            print(f"\n分类准确率:")
+            print(f"  - CSP 特征：{results['metrics']['csp']['cv_mean']:.4f} ± {results['metrics']['csp']['cv_std']:.4f}")
+            print(f"  - 小波特征：{results['metrics']['wavelet']['cv_mean']:.4f} ± {results['metrics']['wavelet']['cv_std']:.4f}")
+            print(f"  - 融合特征：{results['metrics']['fused']['cv_mean']:.4f} ± {results['metrics']['fused']['cv_std']:.4f}")
+            
+            # 找出最佳方法
+            best_method = max(
+                results['metrics'].items(),
+                key=lambda x: x[1]['cv_mean']
+            )
+            print(f"\n🏆 最佳方法：{best_method[0].upper()} (准确率：{best_method[1]['cv_mean']:.4f})")
+            
+            # 询问是否保存结果
+            save = input("\n是否保存结果到文件？(y/n): ")
+            if save.lower() == 'y':
+                import pickle
+                save_path = f"./results_{results['subject_id']}.pkl"
+                with open(save_path, 'wb') as f:
+                    pickle.dump(results, f)
+                print(f"✅ 结果已保存到：{save_path}")
+                
+        else:
+            print("\n❌ 流程执行失败，请检查数据文件是否存在")
+            
+    except FileNotFoundError as e:
+        print(f"\n❌ 错误：{e}")
+        print("\n请确认:")
+        print("  1. 数据文件在正确位置：BCICIV_2a_gdf/A01T.gdf")
+        print("  2. 已安装所有依赖库：mne, numpy, scipy, scikit-learn, pywt")
+        
+    except Exception as e:
+        print(f"\n❌ 发生错误：{e}")
+        import traceback
+        traceback.print_exc()

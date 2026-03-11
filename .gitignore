@@ -24,3 +24,6 @@ env/
 *.png
 *.jpg
 *.jpeg
+
+# Python 序列化文件（结果数据）
+*.pkl

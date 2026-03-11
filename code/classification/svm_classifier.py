@@ -184,6 +184,12 @@ def plot_confusion_matrix(cm, class_names=None, save_path='./confusion_matrix.pn
     if class_names is None:
         class_names = [f'Class {i+1}' for i in range(n_classes)]
     
+    # 确保类别名称数量与矩阵维度匹配
+    if len(class_names) != n_classes:
+        print(f"⚠️  警告：类别名称数量 ({len(class_names)}) 与矩阵维度 ({n_classes}) 不匹配")
+        print(f"   将使用默认类别名称")
+        class_names = [f'Class {i+1}' for i in range(n_classes)]
+    
     # 归一化（转换为百分比）
     cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis] * 100
     
@@ -193,15 +199,11 @@ def plot_confusion_matrix(cm, class_names=None, save_path='./confusion_matrix.pn
     im = ax.imshow(cm_normalized, interpolation='nearest', cmap=plt.cm.Blues)
     plt.colorbar(im, ax=ax, label='Percentage (%)')
     
-    # 添加文本标签
-    tick_marks = np.arange(n_classes)
-    ax.set_xticks(tick_marks)
-    ax.set_yticks(tick_marks)
-    ax.set_xticklabels(class_names)
+    # 添加文本标签 - 直接设置，不使用 set_xticks
+    ax.set_xticks(np.arange(n_classes))
+    ax.set_yticks(np.arange(n_classes))
+    ax.set_xticklabels(class_names, rotation=45, ha="right", rotation_mode="anchor")
     ax.set_yticklabels(class_names)
-    
-    # 旋转 x 轴标签
-    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
     
     # 在每个单元格中显示数值
     thresh = cm_normalized.max() / 2.
