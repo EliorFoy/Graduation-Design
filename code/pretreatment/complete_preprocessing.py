@@ -8,7 +8,7 @@ from mne.preprocessing import ICA
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-from eeg_analysis import get_modified_raw_data  # 导入之前的处理函数
+from .eeg_analysis import get_modified_raw_data  # 导入之前的处理函数
 
 # 设置中文字体
 plt.rcParams['font.sans-serif'] = ['SimHei']
