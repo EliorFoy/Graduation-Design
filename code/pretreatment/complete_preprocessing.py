@@ -34,7 +34,7 @@ def filter_for_ica(raw, l_freq=1.0, h_freq=40.0):
         h_freq=h_freq,
         method='fir',
         phase='zero',
-        verbose=False
+        verbose=False # 静默模式，不打印任何中间日志
     )
     
     print(f"✅ 轻度滤波完成：{l_freq}-{h_freq} Hz")
@@ -73,7 +73,7 @@ def fit_ica(raw_ica, n_components=None, method='fastica', max_iter=800):
     ica = ICA(
         n_components=n_components,
         method=method,
-        random_state=42,
+        random_state=42,  # 固定随机种子确保可重复性
         max_iter=max_iter
     )
     
