@@ -288,12 +288,52 @@ def create_epochs(raw_final, event_id=None, tmin=0, tmax=4, baseline=None):
     
     print(f"   - 从 annotations 中提取到 {len(events)} 个事件")
     print(f"   - 事件类型：{list(event_dict.keys())}")
+    print(f"   - 事件 ID 映射：{event_dict}")
     
-    # 创建 Epochs
+    # 🔧 关键修复：只保留 4 类任务标记 [769, 770, 771, 772]
+    # 注意：MNE 会自动映射 annotations 到整数，需要找到对应的映射值
+    # 原始值 '769', '770', '771', '772' 会被映射到 event_dict 中的值
+    
+    # 找到 4 类任务对应的映射值
+    task_keys = ['769', '770', '771', '772']
+    valid_event_ids = [event_dict[k] for k in task_keys if k in event_dict]
+    
+    print(f"\n   🎯 任务事件 ID: {valid_event_ids}")
+    
+    # 过滤只保留任务事件
+    valid_mask = np.isin(events[:, 2], valid_event_ids)
+    
+    # 检查并报告
+    unique_events, counts = np.unique(events[:, 2], return_counts=True)
+    print(f"\n   📊 原始事件分布:")
+    for event_id, count in zip(unique_events, counts):
+        # 反向查找事件名称
+        event_name = '未知'
+        for k, v in event_dict.items():
+            if v == event_id:
+                event_name = k
+                break
+        print(f"      - {event_id} ({event_name}): {count} 个")
+    
+    if not np.all(valid_mask):
+        n_invalid = np.sum(~valid_mask)
+        print(f"\n   ⚠️  将过滤 {n_invalid} 个非任务事件")
+    
+    # 过滤 events
+    events_filtered = events[valid_mask]
+    
+    print(f"\n   ✅ 过滤后事件数：{len(events_filtered)}")
+    
+    # 创建 Epochs（使用过滤后的 events 和我们定义的 event_id）
+    # 重新创建 event_id 映射，只包含任务类别
+    event_id_final = {k: event_dict[k] for k in task_keys if k in event_dict}
+    
+    print(f"   📋 使用的事件 ID 映射：{event_id_final}")
+    
     epochs = mne.Epochs(
         raw_final, 
-        events, 
-        event_id=event_dict,  # 使用从 annotations 提取的事件 ID
+        events_filtered, 
+        event_id=event_id_final,  # 使用我们定义的映射
         tmin=tmin, 
         tmax=tmax,
         baseline=baseline,
@@ -302,8 +342,7 @@ def create_epochs(raw_final, event_id=None, tmin=0, tmax=4, baseline=None):
         event_repeated='drop'  # 处理重复事件
     )
     
-    print(f"✅ 分段完成")
-    print(f"   - 事件总数：{len(events)}")
+    print(f"\n✅ 分段完成")
     print(f"   - Epochs 数：{len(epochs)}")
     print(f"   - 时间窗口：[{tmin}, {tmax}] s")
     
