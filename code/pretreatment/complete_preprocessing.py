@@ -324,19 +324,26 @@ def drop_artifact_epochs(epochs, events, artifact_codes=[1023]):
     """
     print("\n剔除伪迹试次...")
     
+    # 创建要保留的试次的 mask（True 表示保留）
+    keep_mask = np.ones(len(epochs), dtype=bool)
+    
     total_artifacts = 0
     for artifact_code in artifact_codes:
-        # 找到伪迹事件
+        # 找到伪迹事件的位置
         artifact_mask = events[:, 2] == artifact_code
         n_artifacts = np.sum(artifact_mask)
         
         if n_artifacts > 0:
-            # 剔除包含伪迹的 epochs
-            epochs.drop_events(artifact_mask)
+            # 找到这些伪迹事件对应的 epochs 索引
+            artifact_indices = np.where(artifact_mask)[0]
+            # 标记为不保留
+            keep_mask[artifact_indices] = False
             print(f"   - 剔除了 {n_artifacts} 个事件代码为 {artifact_code} 的试次")
             total_artifacts += n_artifacts
     
     if total_artifacts > 0:
+        # 使用索引切片方式剔除试次（关键：这样会自动更新 events 数组）
+        epochs = epochs[keep_mask].copy()
         print(f"✅ 总共剔除了 {total_artifacts} 个伪迹试次")
         print(f"   - 剩余 Epochs 数：{len(epochs)}")
     else:

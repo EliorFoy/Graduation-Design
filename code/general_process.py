@@ -109,9 +109,26 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
     # ========== Step 5: 获取标签 ==========
     print("\n【Step 5】准备标签")
 
+    # 从 epochs.events 中提取标签
     y = epochs.events[:, 2]
-    print(f"   - 标签形状：{y.shape}")
-    print(f"   - 类别分布：{np.bincount(y)}")
+    
+    # 显示标签分布
+    unique_labels, counts = np.unique(y, return_counts=True)
+    print(f"\n📊 标签分布:")
+    for label, count in zip(unique_labels, counts):
+        label_name = {769: '左手', 770: '右手', 771: '双脚', 772: '舌头'}.get(label, '未知')
+        print(f"   - {label} ({label_name}): {count} 个")
+    
+    # 检查是否有非任务标签
+    valid_labels = [769, 770, 771, 772]
+    invalid_mask = ~np.isin(y, valid_labels)
+    if np.any(invalid_mask):
+        n_invalid = np.sum(invalid_mask)
+        invalid_labels = np.unique(y[invalid_mask])
+        print(f"\n⚠️  警告：发现 {n_invalid} 个非任务标签：{invalid_labels}")
+        print(f"   这些标签将在训练时被排除...")
+    
+    print(f"\n✅ 标签形状：{y.shape}")
 
     # ========== Step 6: 分类器训练与评估 ==========
     print("\n【Step 6】SVM 分类器训练与评估")
