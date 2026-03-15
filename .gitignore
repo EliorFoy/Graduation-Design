@@ -1,6 +1,7 @@
 # EEG 原始数据文件
 BCICIV_2a_gdf/
 BCICIV_2a_gdf.zip
+true_labels/
 
 # Python 缓存
 __pycache__/

@@ -5,18 +5,26 @@ from pathlib import Path
 
 
 
-def get_raw_data()->mne.io.Raw:
-    # 获取项目根目录（向上两级：pretreatment -> code -> Graduation Design）
+def get_raw_data(subject='A01T') -> mne.io.Raw:
+    """
+    加载指定被试的原始数据
+    
+    Args:
+        subject: 被试标识，如 'A01T'（训练集）或 'A01E'（测试集）
+    
+    Returns:
+        raw: MNE Raw 对象
+    """
+    # 获取项目根目录
     project_root = Path(__file__).parent.parent.parent
     print("加载数据集")
-    data_path = project_root / "BCICIV_2a_gdf" / "A01T.gdf"
+    data_path = project_root / "BCICIV_2a_gdf" / f"{subject}.gdf"
     print(f"数据文件路径：{data_path}")
     
     # 检查文件是否存在
     if not data_path.exists():
         print(f"❌ 错误：数据文件不存在！")
         print(f"   期望路径：{data_path}")
-        print(f"   请确认数据文件在正确位置")
         raise FileNotFoundError(f"数据文件不存在：{data_path}")
     
     raw = mne.io.read_raw_gdf(str(data_path), preload=True)
@@ -86,8 +94,17 @@ def set_electrode_and_show(raw):
     plt.show()
     return raw
 
-def get_modified_raw_data()->mne.io.Raw:
-    raw = get_raw_data()
+def get_modified_raw_data(subject='A01T') -> mne.io.Raw:
+    """
+    加载并处理指定被试的原始数据
+    
+    Args:
+        subject: 被试标识，如 'A01T'（训练集）或 'A01E'（测试集）
+    
+    Returns:
+        modified_raw: 处理后的 MNE Raw 对象
+    """
+    raw = get_raw_data(subject)
     modified_raw = modify_channel_name_and_type(raw)
     return modified_raw
 
