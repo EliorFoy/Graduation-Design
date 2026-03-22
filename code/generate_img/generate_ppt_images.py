@@ -88,18 +88,63 @@ def generate_all_images(subject='A01T'):
         import traceback
         traceback.print_exc()
     
-    # ========== 3. 生成 PSD 对比图 ==========
-    print("\n[3/7] 生成功率谱密度对比图...")
+    # ========== 3. 生成 PSD 分析图 ==========
+    print("\n[3/7] 生成功率谱密度分析图...")
     try:
-        save_path = output_dir / "psd_comparison.png"
+        save_path = output_dir / "psd_analysis.png"
         
         # 计算 PSD
         psd = epochs.compute_psd(method='welch', fmin=1, fmax=50)
         
-        fig = psd.plot(show=False)
-        fig.suptitle('功率谱密度 (PSD) - 预处理后')
-        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        # 获取 PSD 数据
+        freqs = psd.freqs
+        psd_data = psd.get_data()  # 获取功率谱数据
+        
+        # 转换为 dB (10 * log10(power))
+        psd_data_db = 10 * np.log10(psd_data)
+        
+        # 平均所有通道和试次
+        mean_psd = np.mean(psd_data_db, axis=(0, 1))
+        std_psd = np.std(psd_data_db, axis=(0, 1))
+        
+        # 创建图表
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        # 绘制 PSD 曲线（蓝色）
+        ax.plot(freqs, mean_psd, color='#1f77b4', linewidth=2, label='平均 PSD')
+        
+        # 绘制标准差阴影区域
+        ax.fill_between(freqs, mean_psd - std_psd, mean_psd + std_psd, 
+                       alpha=0.3, color='#1f77b4', label='±1 标准差')
+        
+        # 标注目标频段
+        ax.axvspan(8, 13, alpha=0.2, color='green', label='μ频段 (8-13 Hz)')
+        ax.axvspan(13, 30, alpha=0.2, color='orange', label='β频段 (13-30 Hz)')
+        
+        # 标注 50Hz 位置（数据集采集时已通过陷波滤波器去除）
+        ax.axvline(x=50, color='red', linestyle='--', linewidth=1.5, alpha=0.5, label='50 Hz (采集时已陷波)')
+        
+        # 设置标签和标题
+        ax.set_xlabel('频率 (Hz)', fontsize=12, fontweight='bold')
+        ax.set_ylabel('功率谱密度 (dB)', fontsize=12, fontweight='bold')
+        ax.set_title('功率谱密度 (PSD) - 预处理后\n(8-30 Hz 为运动想象相关频段，50 Hz 已在采集时去除)', 
+                    fontsize=14, fontweight='bold')
+        
+        # 设置网格
+        ax.grid(True, alpha=0.3, linestyle='--')
+        ax.legend(loc='upper right', fontsize=10)
+        
+        # 设置白色背景
+        ax.set_facecolor('white')
+        fig.patch.set_facecolor('white')
+        
+        # 调整布局
+        plt.tight_layout()
+        
+        # 保存图片
+        plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
         plt.close(fig)
+        
         print(f"✓ PSD 对比图已保存：{save_path}")
         
     except Exception as e:

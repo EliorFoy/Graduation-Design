@@ -258,6 +258,121 @@ def set_reference(raw_final, ref='average'):
     return raw_final
 
 
+def create_epochs_with_artifact_removal_mne(raw_final, tmin=0, tmax=4):
+    """
+    使用 MNE 创建 epochs 并剔除伪迹试次
+    不依赖 BioSig，通过 trial 时间窗口匹配 1023 事件
+    
+    Args:
+        raw_final: 预处理后的 Raw 对象
+        tmin, tmax: epoch 时间窗口
+    
+    Returns:
+        epochs: 剔除伪迹后的 Epochs 对象
+    """
+    print("\n创建分段（含伪迹剔除）...")
+    
+    # 1. 从 annotations 提取所有事件
+    events, event_dict = mne.events_from_annotations(raw_final)
+    
+    print(f"   📊 事件字典：{event_dict}")
+    
+    # 2. 检查是否有 1023 事件
+    event_1023_id = event_dict.get('1023', None)
+    has_artifact_events = event_1023_id is not None
+    
+    if has_artifact_events:
+        artifact_mask = events[:, 2] == event_1023_id
+        artifact_events = events[artifact_mask]
+        print(f"   - 检测到 {len(artifact_events)} 个 1023 伪迹事件")
+    else:
+        print(f"   ⚠️  MNE 未读取到 1023 事件")
+        artifact_events = np.array([])
+    
+    # 3. 找到 trial start (768) 事件
+    event_768_id = event_dict.get('768', None)
+    
+    if event_768_id is not None:
+        trial_start_mask = events[:, 2] == event_768_id
+        trial_start_events = events[trial_start_mask]
+        trial_start_events = trial_start_events[np.argsort(trial_start_events[:, 0])]
+        print(f"   - 检测到 {len(trial_start_events)} 个 trial start (768)")
+    else:
+        print(f"   ⚠️  MNE 未读取到 768 事件，使用 cue onset 排序")
+        # 退而求其次：用 769-772 cue 事件
+        cue_ids = [event_dict.get(str(k), None) for k in [769, 770, 771, 772]]
+        cue_ids = [x for x in cue_ids if x is not None]
+        cue_mask = np.isin(events[:, 2], cue_ids)
+        trial_start_events = events[cue_mask]
+        trial_start_events = trial_start_events[np.argsort(trial_start_events[:, 0])]
+    
+    n_trials = len(trial_start_events)
+    print(f"   📊 总 trial 数：{n_trials}")
+    
+    # 4. 标记哪些 trial 包含伪迹
+    keep_mask = np.ones(n_trials, dtype=bool)
+    sfreq = raw_final.info['sfreq']
+    
+    if len(artifact_events) > 0:
+        for i, trial_event in enumerate(trial_start_events):
+            trial_start_time = trial_event[0]
+            trial_end_time = trial_start_time + 6 * sfreq  # trial 持续 6 秒 (t=0 到 t=6)
+            
+            # 检查是否有 1023 在这个 trial 窗口内
+            for artifact_event in artifact_events:
+                artifact_time = artifact_event[0]
+                if trial_start_time <= artifact_time <= trial_end_time:
+                    keep_mask[i] = False
+                    print(f"      - Trial {i} 包含伪迹 (1023 时间：{artifact_time/sfreq:.1f}s)")
+                    break
+        
+        n_removed = np.sum(~keep_mask)
+        print(f"   ✅ 标记剔除 {n_removed} 个伪迹 trial")
+    else:
+        print(f"   ℹ️  无 1023 事件，保留所有 trial")
+    
+    # 5. 保留干净 trial 对应的 cue 事件 (769-772)
+    clean_trial_events = trial_start_events[keep_mask]
+    
+    # 找到每个干净 trial 对应的 cue onset
+    cue_ids = [event_dict.get(str(k), None) for k in [769, 770, 771, 772]]
+    cue_ids = [x for x in cue_ids if x is not None]
+    
+    final_events = []
+    for trial_event in clean_trial_events:
+        trial_time = trial_event[0]
+        # 找这个 trial 之后的 cue 事件（应该在 t=2s 左右，即 500 采样点后）
+        time_diffs = events[:, 0] - trial_time
+        cue_after_mask = (time_diffs > 0) & (time_diffs < 3000) & np.isin(events[:, 2], cue_ids)
+        cue_candidates = events[cue_after_mask]
+        if len(cue_candidates) > 0:
+            # 取最近的 cue
+            closest_cue = cue_candidates[np.argmin(cue_candidates[:, 0])]
+            final_events.append(closest_cue)
+    
+    final_events = np.array(final_events)
+    print(f"   ✅ 最终有效 cue 事件：{len(final_events)}")
+    
+    # 6. 创建 epochs
+    event_id_final = {k: event_dict[k] for k in ['769', '770', '771', '772'] if k in event_dict}
+    
+    epochs = mne.Epochs(
+        raw_final, 
+        final_events, 
+        event_id=event_id_final,
+        tmin=tmin, 
+        tmax=tmax,
+        baseline=None,
+        preload=True,
+        verbose=False,
+        event_repeated='drop'
+    )
+    
+    print(f"✅ 分段完成：{len(epochs)} 个 epochs")
+    
+    return epochs
+
+
 def create_epochs(raw_final, event_id=None, tmin=0, tmax=4, baseline=None):
     """
     分段
@@ -486,23 +601,32 @@ def plot_preprocessing_comparison(raw_original, raw_ica_filtered, raw_clean, raw
     return fig
 
 
-def complete_preprocessing_pipeline():
+def complete_preprocessing_pipeline(subject='A01T'):
     """
     完整预处理流程
+    
+    Args:
+        subject: 被试 ID，如 'A01T'
     
     Returns:
         epochs_final: 预处理后的 Epochs 对象
         ica: 训练好的 ICA 对象
     """
     print("=" * 60)
-    print("🚀 运行完整预处理流程")
+    print("运行完整预处理流程")
     print("遵循 MNE 官方推荐：轻度滤波 → ICA → 任务滤波")
     print("=" * 60)
     
     # 1. 获取已处理的原始数据（通道映射已完成）
     print("Step 1: 获取已映射通道的原始数据")
-    raw = get_modified_raw_data()
+    raw = get_modified_raw_data(subject=subject)
     print(f"✅ 原始数据加载完成，通道数：{len(raw.ch_names)}")
+    
+    # 🔧 关键新增：无需 BioSig，直接使用 MNE 方法
+    print("\n" + "=" * 40)
+    print("Step 1.5: 准备伪迹剔除信息")
+    print("=" * 40)
+    print("   使用 MNE 方法通过 1023 事件匹配剔除伪迹试次")
     
     # 2. ICA 前的轻度滤波（保留足够频段供 ICA 识别伪迹）
     print("\n" + "=" * 40)
@@ -540,18 +664,13 @@ def complete_preprocessing_pipeline():
     print("=" * 40)
     raw_final = set_reference(raw_final, ref='average')
     
-    # 8. 分段
+    # 8. 分段 + 伪迹剔除（使用 MNE 方法）
     print("\n" + "=" * 40)
-    print("Step 8: 分段")
+    print("Step 8: 分段 + 伪迹剔除")
     print("=" * 40)
-    epochs = create_epochs(raw_final, tmin=0, tmax=4)
     
-    # 9. 剔除伪迹试次
-    print("\n" + "=" * 40)
-    print("Step 9: 剔除伪迹试次")
-    print("=" * 40)
-    events, _ = mne.events_from_annotations(raw_final)
-    epochs_final = drop_artifact_epochs(epochs, events)
+    # 使用 MNE 方法创建 epochs 并剔除伪迹
+    epochs_final = create_epochs_with_artifact_removal_mne(raw_final, tmin=0, tmax=4)
     
     # 10. 可视化对比
     print("\n" + "=" * 40)

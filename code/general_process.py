@@ -70,7 +70,7 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
     # ========== Step 2: 预处理 ==========
     print("\n【Step 2】EEG 预处理")
 
-    epochs, ica = complete_preprocessing_pipeline()
+    epochs, ica = complete_preprocessing_pipeline(subject=subject_id)
 
     print(f"✅ 预处理完成")
     print(f"   - Epochs 形状：{epochs.get_data().shape}")
