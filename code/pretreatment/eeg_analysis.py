@@ -2,6 +2,26 @@ import mne
 from matplotlib import pyplot as plt
 import numpy as np
 from pathlib import Path
+import platform
+
+# 设置中文字体（兼容 Linux/Windows/macOS）
+system_name = platform.system()
+
+if system_name == 'Windows':
+    plt.rcParams['font.sans-serif'] = ['SimHei']
+elif system_name == 'Darwin':  # macOS
+    plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'Heiti TC']
+else:  # Linux
+    # 尝试使用 Linux 常见的中文字体
+    plt.rcParams['font.sans-serif'] = [
+        'WenQuanYi Zen Hei',      # 文泉驿正黑
+        'WenQuanYi Micro Hei',    # 文泉驿微米黑
+        'Noto Sans CJK SC',       # Google Noto 字体
+        'Droid Sans Fallback',
+        'DejaVu Sans'             # fallback：英文字体
+    ]
+
+plt.rcParams['axes.unicode_minus'] = False
 
 
 
@@ -77,10 +97,6 @@ def modify_channel_name_and_type(raw)->mne.io.Raw:
     return raw
 
 def set_electrode_and_show(raw):
-    # 设置中文字体支持
-    plt.rcParams['font.sans-serif'] = ['SimHei']
-    plt.rcParams['axes.unicode_minus'] = False
-
     # 3. 根据电极设置国际通用 10-20 电极位置（基本匹配可能略有差异）
     print("\n设置标准 10-20 电极位置...")
     montage = mne.channels.make_standard_montage('standard_1020')
@@ -106,6 +122,13 @@ def get_modified_raw_data(subject='A01T') -> mne.io.Raw:
     """
     raw = get_raw_data(subject)
     modified_raw = modify_channel_name_and_type(raw)
+    
+    # 【关键修复】设置标准 10-20 电极位置
+    print("\n设置标准 10-20 电极位置...")
+    montage = mne.channels.make_standard_montage('standard_1020')
+    modified_raw.set_montage(montage, on_missing='ignore')
+    print("✅ 电极位置设置完成！")
+    
     return modified_raw
 
 if __name__ == "__main__":

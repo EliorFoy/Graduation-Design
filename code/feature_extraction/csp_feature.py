@@ -195,6 +195,12 @@ def visualize_csp_topo(csp, epochs, save_path='./csp_topoplots.png'):
     """
     print("\n绘制 CSP 拓扑图...")
     
+    # 检查是否有电极位置信息
+    if epochs.info['dig'] is None or len(epochs.info['dig']) == 0:
+        print("⚠️  警告：未找到电极位置信息，跳过 CSP 拓扑图绘制")
+        print("   提示：这不影响 CSP 特征提取，只是无法可视化拓扑图")
+        return
+    
     filters = csp['filters']
     patterns = csp['patterns']
     n_components = csp['n_components']
