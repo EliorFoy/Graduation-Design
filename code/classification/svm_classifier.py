@@ -7,7 +7,7 @@ SVM 分类器模块
 
 import numpy as np
 from sklearn.svm import SVC
-from sklearn.model_selection import cross_val_score, StratifiedKFold, GridSearchCV
+from sklearn.model_selection import cross_val_score, StratifiedKFold, GridSearchCV, cross_val_predict
 from sklearn.metrics import (
     accuracy_score, confusion_matrix, 
     classification_report, cohen_kappa_score
