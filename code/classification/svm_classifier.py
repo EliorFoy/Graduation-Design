@@ -168,7 +168,7 @@ def evaluate_model(y_true, y_pred, class_names=None):
     return metrics
 
 
-def plot_confusion_matrix(cm, class_names=None, save_path='./confusion_matrix.png'):
+def plot_confusion_matrix(cm, class_names=None, save_path='./output_img/confusion_matrix.png'):
     """
     可视化混淆矩阵
     
@@ -223,7 +223,7 @@ def plot_confusion_matrix(cm, class_names=None, save_path='./confusion_matrix.pn
     plt.close()
 
 
-def plot_cv_results(cv_results, save_path='./cv_results.png'):
+def plot_cv_results(cv_results, save_path='./output_img/cv_results.png'):
     """
     可视化交叉验证结果
     

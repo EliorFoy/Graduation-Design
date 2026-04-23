@@ -194,8 +194,8 @@ def detect_and_remove_artifacts(ica, raw_ica, eog_threshold=2.0, ecg_method='cor
         try:
             ica.plot_components(picks=eog_indices, show=False)
             plt.suptitle('检测到的 EOG 成分')
-            plt.savefig('./ica_eog_components.png', dpi=300, bbox_inches='tight')
-            print("   📊 EOG 成分图已保存：ica_eog_components.png")
+            plt.savefig('./output_img/ica_eog_components.png', dpi=300, bbox_inches='tight')
+            print("   📊 EOG 成分图已保存：./output_img/ica_eog_components.png")
         except RuntimeError as e:
             print(f"   ⚠️  无法绘制 ICA 成分图：{e}")
             print("   （这不影响 ICA 去噪效果，只是可视化问题）")
@@ -522,7 +522,7 @@ def drop_artifact_epochs(epochs, events, artifact_codes=[1023]):
     return epochs
 
 
-def plot_preprocessing_comparison(raw_original, raw_ica_filtered, raw_clean, raw_final, save_path='./preprocessing_comparison.png'):
+def plot_preprocessing_comparison(raw_original, raw_ica_filtered, raw_clean, raw_final, save_path='./output_img/preprocessing_comparison.png'):
     """
     可视化预处理前后对比
     

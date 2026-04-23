@@ -189,7 +189,7 @@ def compute_csp_patterns(W_csp, R_total=None):
     return np.linalg.pinv(W_csp).T
 
 
-def visualize_csp_topo(csp, epochs, save_path='./csp_topoplots.png'):
+def visualize_csp_topo(csp, epochs, save_path='./output_img/csp_topoplots.png'):
     """
     可视化 CSP 滤波器的头皮拓扑图
     """

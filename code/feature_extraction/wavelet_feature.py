@@ -235,7 +235,7 @@ def compute_wavelet_freq_bands(sfreq, level):
     return freq_bands
 
 
-def plot_wavelet_decomposition(signal, sfreq, wavelet='db4', level=4, save_path='./wavelet_decomposition.png'):
+def plot_wavelet_decomposition(signal, sfreq, wavelet='db4', level=4, save_path='./output_img/wavelet_decomposition.png'):
     """
     可视化小波分解结果（已修复重构系数对齐 Bug）
     

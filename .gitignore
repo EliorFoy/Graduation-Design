@@ -28,3 +28,6 @@ env/
 
 # Python 序列化文件（结果数据）
 *.pkl
+
+# uv 锁文件
+uv.lock
