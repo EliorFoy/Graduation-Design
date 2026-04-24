@@ -16,9 +16,9 @@ from sklearn.metrics import (
 )
 from matplotlib import pyplot as plt
 try:
-    from ..feature_extraction.eeg_transformers import EpochsToArray, make_feature_union
+    from ..feature_extraction.eeg_transformers import EpochsToArray, make_feature_union, FilterBankCSP
 except ImportError:
-    from feature_extraction.eeg_transformers import EpochsToArray, make_feature_union
+    from feature_extraction.eeg_transformers import EpochsToArray, make_feature_union, FilterBankCSP
 
 
 def make_eeg_svm_pipeline(
@@ -54,6 +54,7 @@ def train_eeg_svm_pipeline(
     wavelet_level=4,
     kernel='rbf',
     random_state=42,
+    freq_bands=None,  # 【新增】用于 FBCSP
 ):
     """
     训练并交叉验证 EEG SVM Pipeline（无特征泄漏）
@@ -61,13 +62,14 @@ def train_eeg_svm_pipeline(
     Args:
         epochs_or_data: MNE Epochs 对象或数组数据
         y: 标签向量
-        feature_set: 特征集类型 ('csp', 'wavelet', 'fused')
+        feature_set: 特征集类型 ('csp', 'wavelet', 'fused', 'fb_csp')
         cv_folds: 交叉验证折数
         n_csp_components: CSP 成分数
         wavelet: 小波基类型
         wavelet_level: 小波分解层数
         kernel: SVM 核函数
         random_state: 随机种子
+        freq_bands: FBCSP 频段列表，如 [(8,12), (12,16), ...]
     
     Returns:
         pipeline: 训练好的 Pipeline
@@ -82,10 +84,13 @@ def train_eeg_svm_pipeline(
     # 【关键修复】显式将 Epochs 转为三维数组，避免 cross_val_score 索引时维度丢失
     if hasattr(epochs_or_data, 'get_data'):
         X = epochs_or_data.get_data()  # 三维数组 (n_trials, n_channels, n_times)
+        sfreq = epochs_or_data.info['sfreq']
         print(f"   - 输入数据类型：Epochs → numpy.ndarray")
         print(f"   - 数据形状：{X.shape}")
+        print(f"   - 采样率：{sfreq} Hz")
     else:
         X = np.asarray(epochs_or_data)
+        sfreq = None
         print(f"   - 输入数据类型：numpy.ndarray")
         print(f"   - 数据形状：{X.shape}")
     
@@ -98,14 +103,42 @@ def train_eeg_svm_pipeline(
     print(f"   - 类别分布：{dict(zip(*np.unique(y, return_counts=True)))}")
     print(f"   - 交叉验证折数：{cv_folds}")
 
-    pipeline = make_eeg_svm_pipeline(
-        feature_set=feature_set,
-        n_csp_components=n_csp_components,
-        wavelet=wavelet,
-        wavelet_level=wavelet_level,
-        kernel=kernel,
-        random_state=random_state,
-    )
+    # 【新增】处理 FBCSP 特殊情况
+    if feature_set == 'fb_csp':
+        if sfreq is None:
+            raise ValueError("FBCSP 需要提供 sfreq 参数，请传入 MNE Epochs 对象")
+        
+        # 默认频带：覆盖运动想象 μ 和 β 节律
+        if freq_bands is None:
+            freq_bands = [(8, 12), (12, 16), (16, 20), (20, 24), (24, 30)]
+        
+        print(f"   - FBCSP 频带数量: {len(freq_bands)}")
+        print(f"   - 每个频段 CSP 成分数: {n_csp_components}")
+        print(f"   - 总特征维度: {len(freq_bands) * n_csp_components}")
+        
+        # 构建 FBCSP Pipeline
+        from sklearn.pipeline import Pipeline as SklearnPipeline
+        pipeline = SklearnPipeline([
+            ('fbcsp', FilterBankCSP(
+                freq_bands=freq_bands,
+                sfreq=sfreq,
+                n_components=n_csp_components,
+                log=True,
+                reg=None,
+            )),
+            ('scaler', StandardScaler()),
+            ('svm', SVC(kernel=kernel, random_state=random_state)),
+        ])
+    else:
+        # 原有 csp, wavelet, fused 逻辑
+        pipeline = make_eeg_svm_pipeline(
+            feature_set=feature_set,
+            n_csp_components=n_csp_components,
+            wavelet=wavelet,
+            wavelet_level=wavelet_level,
+            kernel=kernel,
+            random_state=random_state,
+        )
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
     cv_scores = cross_val_score(pipeline, X, y, cv=cv, scoring='accuracy')
     

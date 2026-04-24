@@ -130,6 +130,17 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
         random_state=DEFAULT_CONFIG.random_state,
     )
 
+    # 6.4 【新增】使用 FBCSP 特征（滤波器组 CSP）
+    print("\n--- 使用 FBCSP 特征（滤波器组 CSP） ---")
+    clf_fbcsp, cv_scores_fbcsp, acc_fbcsp = train_eeg_svm_pipeline(
+        epochs, y, 
+        feature_set='fb_csp',
+        cv_folds=DEFAULT_CONFIG.cv_folds,
+        n_csp_components=DEFAULT_CONFIG.csp_components,
+        freq_bands=[(8, 12), (12, 16), (16, 20), (20, 24), (24, 30)],
+        random_state=DEFAULT_CONFIG.random_state,
+    )
+
     # ========== Step 5: 结果汇总 ==========
     print("\n【Step 5】结果汇总")
 
@@ -139,11 +150,14 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
     print(f"CSP 特征准确率：     {acc_csp:.4f} ± {cv_scores_csp.std():.4f}")
     print(f"小波特征准确率：   {acc_wavelet:.4f} ± {cv_scores_wavelet.std():.4f}")
     print(f"融合特征准确率：   {acc_fused:.4f} ± {cv_scores_fused.std():.4f}")
+    print(f"FBCSP 特征准确率： {acc_fbcsp:.4f} ± {cv_scores_fbcsp.std():.4f}")
     print("=" * 60)
 
     # 找出最佳特征
-    best_acc = max(acc_csp, acc_wavelet, acc_fused)
-    if best_acc == acc_fused:
+    best_acc = max(acc_csp, acc_wavelet, acc_fused, acc_fbcsp)
+    if best_acc == acc_fbcsp:
+        print(f"\n🏆 FBCSP 特征表现最佳！")
+    elif best_acc == acc_fused:
         print(f"\n🏆 融合特征表现最佳！")
     elif best_acc == acc_csp:
         print(f"\n🏆 CSP 特征表现最佳！")
@@ -161,6 +175,7 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
         "clf_csp": clf_csp,
         "clf_wavelet": clf_wavelet,
         "clf_fused": clf_fused,
+        "clf_fbcsp": clf_fbcsp,  # 【新增】
         "metrics": {
             "csp": {
                 "accuracy": acc_csp,
@@ -179,6 +194,12 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
                 "cv_scores": cv_scores_fused,
                 "cv_mean": acc_fused,
                 "cv_std": cv_scores_fused.std(),
+            },
+            "fbcsp": {  # 【新增】
+                "accuracy": acc_fbcsp,
+                "cv_scores": cv_scores_fbcsp,
+                "cv_mean": acc_fbcsp,
+                "cv_std": cv_scores_fbcsp.std(),
             },
         },
     }
