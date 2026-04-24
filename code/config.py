@@ -46,25 +46,43 @@ class EEGPipelineConfig:
 DEFAULT_CONFIG = EEGPipelineConfig()
 
 
-TASK_EVENT_IDS = (769, 770, 771, 772)
+TASK_EVENT_ANNOTATIONS = ("769", "770", "771", "772")
+"""GDF 文件中运动想象 cue 事件的原始注解字符串。"""
+
 TASK_CLASS_IDS = (1, 2, 3, 4)
-EVENT_TO_CLASS = dict(zip(TASK_EVENT_IDS, TASK_CLASS_IDS))
 TASK_CLASS_NAMES = ["left hand", "right hand", "feet", "tongue"]
 
+# 注解字符串 → 类别标签的静态映射
+_ANNOTATION_TO_CLASS = dict(zip(TASK_EVENT_ANNOTATIONS, TASK_CLASS_IDS))
 
-def events_to_class_labels(events):
-    """将 BCI IV 2a 事件 ID (769-772) 映射为类别标签 (1-4)。"""
 
+def epochs_events_to_class_labels(epochs):
+    """
+    利用 epochs.event_id 将 MNE 内部事件 ID 动态映射为类别标签 (1-4)。
+
+    MNE 的 events_from_annotations 会将 GDF 注解字符串 '769'-'772'
+    映射为连续整数（具体值取决于文件中注解的排序），不能假设为固定值。
+    本函数通过 epochs.event_id 获取实际映射关系，确保始终正确。
+    """
     import numpy as np
 
-    events = np.asarray(events)
-    labels = np.empty(events.shape, dtype=int)
-    for event_id, class_id in EVENT_TO_CLASS.items():
-        labels[events == event_id] = class_id
-    unknown_mask = ~np.isin(events, TASK_EVENT_IDS)
-    if np.any(unknown_mask):
-        raise ValueError(f"Cannot map non-task event ids: {np.unique(events[unknown_mask])}")
-    return labels
+    event_id = epochs.event_id  # e.g. {'769': 7, '770': 8, ...}
+    mne_id_to_class = {}
+    for annotation, mne_id in event_id.items():
+        if annotation in _ANNOTATION_TO_CLASS:
+            mne_id_to_class[mne_id] = _ANNOTATION_TO_CLASS[annotation]
+
+    raw_ids = epochs.events[:, 2]
+    y = np.array([mne_id_to_class.get(eid, 0) for eid in raw_ids])
+
+    invalid_mask = y == 0
+    if np.any(invalid_mask):
+        bad_ids = np.unique(raw_ids[invalid_mask])
+        raise ValueError(
+            f"Cannot map non-task MNE event ids: {bad_ids}. "
+            f"epochs.event_id = {event_id}"
+        )
+    return y
 
 def resolve_data_path(subject: str, data_root=None, config: EEGPipelineConfig = DEFAULT_CONFIG) -> Path:
     """根据被试/会话 ID 解析 BCI IV 2a GDF 文件路径。"""

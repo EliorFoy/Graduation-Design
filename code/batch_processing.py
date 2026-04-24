@@ -80,9 +80,15 @@ def batch_process_subjects(subject_ids=None, sessions=None, data_root=None):
                 save_processed_data(epochs_final, str(output_path))
                 
                 # 计算指标
-                snr_improvement = 0.0
                 n_epochs = len(epochs_final)
                 n_artifacts_removed = len(ica_model.exclude)
+                
+                # 计算信噪比改善（需要原始数据用于对比）
+                try:
+                    raw_original = mne.io.read_raw_gdf(str(data_path), preload=True, verbose=False)
+                    snr_improvement = compute_snr_improvement(raw_original, epochs_final)
+                except Exception:
+                    snr_improvement = 0.0
                 
                 results.append({
                     '被试': subject_session,

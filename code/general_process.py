@@ -16,7 +16,7 @@ for path in (PROJECT_ROOT, CODE_DIR):
 
 from classification.svm_classifier import train_eeg_svm_pipeline, plot_confusion_matrix
 from pretreatment.complete_preprocessing import complete_preprocessing_pipeline
-from code.config import DEFAULT_CONFIG, TASK_CLASS_IDS, TASK_CLASS_NAMES, TASK_EVENT_IDS, ensure_result_dirs, events_to_class_labels, resolve_data_path
+from code.config import DEFAULT_CONFIG, TASK_CLASS_IDS, TASK_CLASS_NAMES, TASK_EVENT_ANNOTATIONS, ensure_result_dirs, epochs_events_to_class_labels, resolve_data_path
 import numpy as np
 
 # 添加项目路径
@@ -69,33 +69,12 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
     # ========== Step 3: 获取标签 ==========
     print("\n【Step 3】准备标签")
 
-    # 从 epochs.events 中提取标签
-    y_events = epochs.events[:, 2]
+    # 使用动态映射：通过 epochs.event_id 将 MNE 内部事件 ID 转换为类别标签 (1-4)
+    y = epochs_events_to_class_labels(epochs)
     
     # 显示标签分布
-    unique_labels, counts = np.unique(y_events, return_counts=True)
-    print(f"\n📊 原始事件ID分布:")
-    for label, count in zip(unique_labels, counts):
-        label_name = {7: '左手', 8: '右手', 9: '双脚', 10: '舌头'}.get(label, f'未知({label})')
-        print(f"   - {label} ({label_name}): {count} 个")
-    
-    # 将 MNE 映射后的事件 ID (7-10) 转换为类别标签 (1-4)
-    # MNE events_from_annotations 会将 '769'-'772' 映射为连续整数 7-10
-    event_to_class_mapping = {7: 1, 8: 2, 9: 3, 10: 4}
-    y = np.array([event_to_class_mapping.get(event_id, 0) for event_id in y_events])
-    
-    # 检查是否有无效标签
-    invalid_mask = (y == 0)
-    if np.any(invalid_mask):
-        n_invalid = np.sum(invalid_mask)
-        print(f"\n⚠️  警告：发现 {n_invalid} 个无法映射的标签")
-        print(f"   这些试次将被排除...")
-        valid_mask = ~invalid_mask
-        epochs = epochs[valid_mask]
-        y = y[valid_mask]
-    
-    print(f"\n✅ 标签转换完成，类别标签分布:")
     unique_classes, class_counts = np.unique(y, return_counts=True)
+    print(f"\n📊 类别标签分布:")
     for cls, cnt in zip(unique_classes, class_counts):
         cls_name = TASK_CLASS_NAMES[cls - 1] if cls <= len(TASK_CLASS_NAMES) else '未知'
         print(f"   - 类别 {cls} ({cls_name}): {cnt} 个")
@@ -110,6 +89,7 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
     clf_csp, cv_scores_csp, acc_csp = train_eeg_svm_pipeline(
         epochs, y, feature_set="csp", cv_folds=DEFAULT_CONFIG.cv_folds,
         n_csp_components=DEFAULT_CONFIG.csp_components,
+        kernel=DEFAULT_CONFIG.svm_kernel,
         random_state=DEFAULT_CONFIG.random_state,
     )
 
@@ -118,6 +98,7 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
     clf_wavelet, cv_scores_wavelet, acc_wavelet = train_eeg_svm_pipeline(
         epochs, y, feature_set="wavelet", cv_folds=DEFAULT_CONFIG.cv_folds,
         wavelet=DEFAULT_CONFIG.wavelet, wavelet_level=DEFAULT_CONFIG.wavelet_level,
+        kernel=DEFAULT_CONFIG.svm_kernel,
         random_state=DEFAULT_CONFIG.random_state,
     )
 
@@ -127,21 +108,23 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
         epochs, y, feature_set="fused", cv_folds=DEFAULT_CONFIG.cv_folds,
         n_csp_components=DEFAULT_CONFIG.csp_components,
         wavelet=DEFAULT_CONFIG.wavelet, wavelet_level=DEFAULT_CONFIG.wavelet_level,
-        motor_channels_only=False,  # 全通道
+        motor_channels_only=False,
+        kernel=DEFAULT_CONFIG.svm_kernel,
         random_state=DEFAULT_CONFIG.random_state,
     )
     
-    # 6.3b 【优化】使用融合特征（仅运动区通道）
+    # 6.3b 使用融合特征（仅运动区通道）
     print("\n--- 使用融合特征（运动区通道 C3/Cz/C4） ---")
     clf_fused_motor, cv_scores_fused_motor, acc_fused_motor = train_eeg_svm_pipeline(
         epochs, y, feature_set="fused", cv_folds=DEFAULT_CONFIG.cv_folds,
         n_csp_components=DEFAULT_CONFIG.csp_components,
         wavelet=DEFAULT_CONFIG.wavelet, wavelet_level=DEFAULT_CONFIG.wavelet_level,
-        motor_channels_only=True,  # ⭐ 启用运动区通道
+        motor_channels_only=True,
+        kernel=DEFAULT_CONFIG.svm_kernel,
         random_state=DEFAULT_CONFIG.random_state,
     )
 
-    # 6.4 【新增】使用 FBCSP 特征（滤波器组 CSP）
+    # 6.4 使用 FBCSP 特征（滤波器组 CSP）
     print("\n--- 使用 FBCSP 特征（滤波器组 CSP） ---")
     clf_fbcsp, cv_scores_fbcsp, acc_fbcsp = train_eeg_svm_pipeline(
         epochs, y, 
@@ -149,6 +132,7 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
         cv_folds=DEFAULT_CONFIG.cv_folds,
         n_csp_components=DEFAULT_CONFIG.csp_components,
         freq_bands=[(8, 12), (12, 16), (16, 20), (20, 24), (24, 30)],
+        kernel=DEFAULT_CONFIG.svm_kernel,
         random_state=DEFAULT_CONFIG.random_state,
     )
 

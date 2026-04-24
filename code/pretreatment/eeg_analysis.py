@@ -12,24 +12,15 @@ except ModuleNotFoundError:
         sys.path.insert(0, str(PROJECT_ROOT))
     from code.config import DEFAULT_CONFIG, resolve_data_path
 
-# 设置中文字体（兼容 Linux/Windows/macOS）
-system_name = platform.system()
-
-if system_name == 'Windows':
-    plt.rcParams['font.sans-serif'] = ['SimHei']
-elif system_name == 'Darwin':  # macOS
-    plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'Heiti TC']
-else:  # Linux
-    # 尝试使用 Linux 常见的中文字体
-    plt.rcParams['font.sans-serif'] = [
-        'WenQuanYi Zen Hei',      # 文泉驿正黑
-        'WenQuanYi Micro Hei',    # 文泉驿微米黑
-        'Noto Sans CJK SC',       # Google Noto 字体
-        'Droid Sans Fallback',
-        'DejaVu Sans'             # fallback：英文字体
-    ]
-
-plt.rcParams['axes.unicode_minus'] = False
+# 设置中文字体
+try:
+    import code._plot_config  # noqa: F401
+except ImportError:
+    import platform
+    system_name = platform.system()
+    if system_name == 'Windows':
+        plt.rcParams['font.sans-serif'] = ['SimHei']
+    plt.rcParams['axes.unicode_minus'] = False
 
 
 

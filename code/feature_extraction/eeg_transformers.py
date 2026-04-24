@@ -81,7 +81,7 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
 
     def _filter_band(self, X, l_freq, h_freq):
         """
-        对三维数组 (trials, channels, time) 进行带通滤波
+        对三维数组 (trials, channels, time) 进行带通滤波（向量化）
         
         Args:
             X: 三维数组 (n_trials, n_channels, n_times)
@@ -92,11 +92,8 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
             X_filt: 滤波后的数组
         """
         sos = self._get_sos(l_freq, h_freq)
-        X_filt = np.zeros_like(X)
-        for i in range(X.shape[0]):
-            # axis=1 表示沿通道维度滤波（每个通道独立）
-            X_filt[i] = signal.sosfiltfilt(sos, X[i], axis=1)
-        return X_filt
+        # axis=2 表示沿时间维度滤波，一次性处理所有 trial 和通道
+        return signal.sosfiltfilt(sos, X, axis=2)
 
     def fit(self, X, y):
         """
