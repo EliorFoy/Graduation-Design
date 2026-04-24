@@ -220,6 +220,11 @@ def visualize_csp_topo(csp, epochs, save_path='./output_img/csp_topoplots.png'):
     """
     print("\n绘制 CSP 拓扑图...")
     
+    # 确保输出目录存在
+    from pathlib import Path
+    output_dir = Path(save_path).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
     # 检查是否有电极位置信息
     if epochs.info['dig'] is None or len(epochs.info['dig']) == 0:
         print("⚠️  警告：未找到电极位置信息，跳过 CSP 拓扑图绘制")

@@ -70,29 +70,37 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
     print("\n【Step 3】准备标签")
 
     # 从 epochs.events 中提取标签
-    y = epochs.events[:, 2]
+    y_events = epochs.events[:, 2]
     
     # 显示标签分布
-    unique_labels, counts = np.unique(y, return_counts=True)
-    print(f"\n📊 标签分布:")
+    unique_labels, counts = np.unique(y_events, return_counts=True)
+    print(f"\n📊 原始事件ID分布:")
     for label, count in zip(unique_labels, counts):
-        label_name = {769: '左手', 770: '右手', 771: '双脚', 772: '舌头'}.get(label, '未知')
+        label_name = {7: '左手', 8: '右手', 9: '双脚', 10: '舌头'}.get(label, f'未知({label})')
         print(f"   - {label} ({label_name}): {count} 个")
     
-    # 检查是否有非任务标签
-    invalid_mask = ~np.isin(y, TASK_EVENT_IDS)
+    # 将 MNE 映射后的事件 ID (7-10) 转换为类别标签 (1-4)
+    # MNE events_from_annotations 会将 '769'-'772' 映射为连续整数 7-10
+    event_to_class_mapping = {7: 1, 8: 2, 9: 3, 10: 4}
+    y = np.array([event_to_class_mapping.get(event_id, 0) for event_id in y_events])
+    
+    # 检查是否有无效标签
+    invalid_mask = (y == 0)
     if np.any(invalid_mask):
         n_invalid = np.sum(invalid_mask)
-        invalid_labels = np.unique(y[invalid_mask])
-        print(f"\n⚠️  警告：发现 {n_invalid} 个非任务标签：{invalid_labels}")
-        print(f"   这些标签将在训练时被排除...")
-    
-    print(f"\n✅ 标签形状：{y.shape}")
-
-    if np.any(invalid_mask):
+        print(f"\n⚠️  警告：发现 {n_invalid} 个无法映射的标签")
+        print(f"   这些试次将被排除...")
         valid_mask = ~invalid_mask
         epochs = epochs[valid_mask]
         y = y[valid_mask]
+    
+    print(f"\n✅ 标签转换完成，类别标签分布:")
+    unique_classes, class_counts = np.unique(y, return_counts=True)
+    for cls, cnt in zip(unique_classes, class_counts):
+        cls_name = TASK_CLASS_NAMES[cls - 1] if cls <= len(TASK_CLASS_NAMES) else '未知'
+        print(f"   - 类别 {cls} ({cls_name}): {cnt} 个")
+    
+    print(f"\n✅ 最终标签形状：{y.shape}")
 
     # ========== Step 4: 分类器训练与评估 ==========
     print("\n【Step 4】SVM 分类器训练与评估")

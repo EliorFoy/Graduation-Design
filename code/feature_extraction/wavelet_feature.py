@@ -256,6 +256,10 @@ def plot_wavelet_decomposition(signal, sfreq, wavelet='db4', level=4, save_path=
     """
     print("\n绘制小波分解图...")
     
+    # 确保输出目录存在
+    output_dir = Path(save_path).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
     # 小波分解 (coeffs = [cA_n, cD_n, cD_n-1, ..., cD_1])
     coeffs = pywt.wavedec(signal, wavelet, level=level)
     freq_bands = compute_wavelet_freq_bands(sfreq, level)

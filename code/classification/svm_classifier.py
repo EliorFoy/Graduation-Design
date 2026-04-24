@@ -251,6 +251,11 @@ def plot_confusion_matrix(cm, class_names=None, save_path='./output_img/confusio
     """
     print("\n绘制混淆矩阵图...")
     
+    # 确保输出目录存在
+    from pathlib import Path
+    output_dir = Path(save_path).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
     n_classes = cm.shape[0]
     
     if class_names is None:

@@ -112,7 +112,7 @@ def fit_ica(raw_ica, n_components=None, method='fastica', max_iter=800):
     return ica
 
 
-def detect_and_remove_artifacts(ica, raw_ica, eog_threshold=2.0, ecg_method='correlation'):
+def detect_and_remove_artifacts(ica, raw_ica, eog_threshold=2.0, ecg_method='correlation', save_path='./output_img/ica_eog_components.png'):
     """
     自动识别并去除伪迹成分
     
@@ -121,6 +121,7 @@ def detect_and_remove_artifacts(ica, raw_ica, eog_threshold=2.0, ecg_method='cor
         raw_ica: 用于检测的轻度滤波数据
         eog_threshold: EOG 检测阈值（标准差倍数，降低到 2.0 提高灵敏度）
         ecg_method: ECG 检测方法
+        save_path: EOG 成分图保存路径
     
     Returns:
         ica: 更新了 exclude 的 ICA 对象
@@ -200,10 +201,14 @@ def detect_and_remove_artifacts(ica, raw_ica, eog_threshold=2.0, ecg_method='cor
     # 可视化检测到的 EOG 成分
     if len(eog_indices) > 0:
         try:
+            # 确保输出目录存在
+            output_dir = Path(save_path).parent
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
             ica.plot_components(picks=eog_indices, show=False)
             plt.suptitle('检测到的 EOG 成分')
-            plt.savefig('./output_img/ica_eog_components.png', dpi=300, bbox_inches='tight')
-            print("   📊 EOG 成分图已保存：./output_img/ica_eog_components.png")
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"   📊 EOG 成分图已保存：{save_path}")
         except RuntimeError as e:
             print(f"   ⚠️  无法绘制 ICA 成分图：{e}")
             print("   （这不影响 ICA 去噪效果，只是可视化问题）")
@@ -543,6 +548,10 @@ def plot_preprocessing_comparison(raw_original, raw_ica_filtered, raw_clean, raw
     """
     print("\n可视化预处理效果...")
     
+    # 确保输出目录存在
+    output_dir = Path(save_path).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
     fig, axes = plt.subplots(4, 2, figsize=(14, 12))
     
     # 1. 原始数据 PSD
@@ -678,7 +687,7 @@ def complete_preprocessing_pipeline(
     print("\n" + "=" * 40)
     print("Step 4: 检测并去除伪迹")
     print("=" * 40)
-    ica = detect_and_remove_artifacts(ica, raw_ica_filtered)
+    ica = detect_and_remove_artifacts(ica, raw_ica_filtered, save_path='./output_img/ica_eog_components.png')
     
     # 5. 应用 ICA 去噪
     print("\n" + "=" * 40)

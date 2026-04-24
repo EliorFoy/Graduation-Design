@@ -193,7 +193,7 @@ def preprocess_evaluation_set(subject_id="A01E", data_root=None, config=DEFAULT_
 
     # 4. 检测并去除伪迹
     print("\nStep 4: 检测并去除伪迹")
-    ica = detect_and_remove_artifacts(ica, raw_ica_filtered)
+    ica = detect_and_remove_artifacts(ica, raw_ica_filtered, save_path='./output_img/ica_eog_components.png')
 
     # 5. 应用 ICA 去噪
     print("\nStep 5: 应用 ICA 去噪")
