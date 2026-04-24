@@ -10,26 +10,28 @@
 测试集：A01E.gdf（不含类别标签） + true_labels/A01E.mat（真实标签）
 """
 
+from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CODE_DIR = Path(__file__).resolve().parent
+for path in (PROJECT_ROOT, CODE_DIR):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
 import numpy as np
 import pickle
-from pathlib import Path
 from scipy.io import loadmat
 from sklearn.metrics import (
     accuracy_score, confusion_matrix,
     classification_report, cohen_kappa_score,
 )
-import sys
 import mne
 
 # 添加项目路径
-sys.path.append(str(Path(__file__).parent))
 
-from classification.svm_classifier import train_svm_classifier, plot_confusion_matrix
-from feature_extraction.wavelet_feature import (
-    extract_wavelet_energy_features,
-    normalize_features,
-)
-from feature_extraction.csp_feature import extract_csp_features
+from classification.svm_classifier import train_eeg_svm_pipeline, plot_confusion_matrix
+from code.config import DEFAULT_CONFIG, TASK_CLASS_IDS, TASK_CLASS_NAMES, TASK_EVENT_IDS, ensure_result_dirs, events_to_class_labels
 from pretreatment.complete_preprocessing import (
     complete_preprocessing_pipeline,
     filter_for_ica,
@@ -77,7 +79,7 @@ def load_true_labels(subject_id: str) -> np.ndarray:
 #  核心新增函数：评估集 Epoching（使用 768 事件）
 # =========================================================================
 
-def create_epochs_for_evaluation(raw_final, tmin=0, tmax=4, baseline=None):
+def create_epochs_for_evaluation(raw_final, tmin=0, tmax=4, baseline=None, trial_start_offset=2.0):
     """
     为评估集创建 Epochs
 
@@ -123,8 +125,8 @@ def create_epochs_for_evaluation(raw_final, tmin=0, tmax=4, baseline=None):
     # 由于训练集 create_epochs 使用 769-772 事件（cue 出现时刻），tmin=0, tmax=4
     # 这里 768 是 trial 开始（t=0），cue 在 t=2 出现
     # 所以用 768 分段时要偏移 2 秒：tmin_768 = tmin + 2, tmax_768 = tmax + 2
-    tmin_adjusted = tmin + 2  # cue 在 768 之后 2 秒出现
-    tmax_adjusted = tmax + 2
+    tmin_adjusted = tmin + trial_start_offset  # cue 在 768 之后约 2 秒出现
+    tmax_adjusted = tmax + trial_start_offset
 
     print(f"   - 时间窗口调整：768 + [{tmin_adjusted}, {tmax_adjusted}] s")
     print(f"     (对应 cue 后 [{tmin}, {tmax}] s)")
@@ -147,6 +149,11 @@ def create_epochs_for_evaluation(raw_final, tmin=0, tmax=4, baseline=None):
     print(f"   - Epochs 数：{len(epochs)}")
     print(f"   - 通道数：{len(epochs.ch_names)}")
 
+    epochs.metadata = {
+        "trial_index": epochs.selection.astype(int),
+        "event_sample": events_trial[epochs.selection, 0].astype(int),
+    }
+
     return epochs
 
 
@@ -154,7 +161,7 @@ def create_epochs_for_evaluation(raw_final, tmin=0, tmax=4, baseline=None):
 #  评估集预处理 Pipeline
 # =========================================================================
 
-def preprocess_evaluation_set(subject_id="A01E"):
+def preprocess_evaluation_set(subject_id="A01E", data_root=None, config=DEFAULT_CONFIG):
     """
     对评估集运行预处理流程
 
@@ -173,12 +180,12 @@ def preprocess_evaluation_set(subject_id="A01E"):
 
     # 1. 加载数据
     print("\nStep 1: 加载评估集原始数据")
-    raw = get_modified_raw_data(subject=subject_id)
+    raw = get_modified_raw_data(subject=subject_id, data_root=data_root)
     print(f"✅ 数据加载完成，通道数：{len(raw.ch_names)}")
 
     # 2. ICA 前轻度滤波
     print("\nStep 2: ICA 前轻度滤波")
-    raw_ica_filtered = filter_for_ica(raw, l_freq=1.0, h_freq=40.0)
+    raw_ica_filtered = filter_for_ica(raw, l_freq=config.ica_l_freq, h_freq=config.ica_h_freq)
 
     # 3. ICA 分解
     print("\nStep 3: ICA 分解")
@@ -193,8 +200,8 @@ def preprocess_evaluation_set(subject_id="A01E"):
     raw_clean = apply_ica(ica, raw)
 
     # 6. 任务定制滤波
-    print("\nStep 6: 任务定制滤波 (8-30 Hz)")
-    raw_final = filter_for_task(raw_clean, l_freq=8.0, h_freq=30.0)
+    print(f"\nStep 6: 任务定制滤波 ({config.task_l_freq:g}-{config.task_h_freq:g} Hz)")
+    raw_final = filter_for_task(raw_clean, l_freq=config.task_l_freq, h_freq=config.task_h_freq)
 
     # 7. 重参考
     print("\nStep 7: 平均参考")
@@ -202,7 +209,12 @@ def preprocess_evaluation_set(subject_id="A01E"):
 
     # 8. 分段（使用 768 而非 769-772）
     print("\nStep 8: 分段（768 事件）")
-    epochs = create_epochs_for_evaluation(raw_final, tmin=0, tmax=4)
+    epochs = create_epochs_for_evaluation(
+        raw_final,
+        tmin=config.epoch_tmin,
+        tmax=config.epoch_tmax,
+        trial_start_offset=config.eval_trial_start_offset,
+    )
 
     print(f"\n{'=' * 60}")
     print(f"🎉 评估集预处理完成：{subject_id}")
@@ -231,8 +243,10 @@ def align_labels_with_epochs(epochs, true_labels):
     Returns:
         aligned_labels: 与 epochs 长度一致的标签数组
     """
-    # epochs.selection 记录了从原始 events 中保留下来的索引
-    kept_indices = epochs.selection
+    if epochs.metadata is not None and "trial_index" in epochs.metadata:
+        kept_indices = epochs.metadata["trial_index"].to_numpy(dtype=int)
+    else:
+        kept_indices = epochs.selection.astype(int)
     n_epochs = len(epochs)
     n_labels = len(true_labels)
 
@@ -257,155 +271,87 @@ def align_labels_with_epochs(epochs, true_labels):
 #  主函数：训练 + 评估
 # =========================================================================
 
-def train_and_evaluate(train_subject="A01T", eval_subject="A01E"):
+def train_and_evaluate(train_subject="A01T", eval_subject="A01E", data_root=None, config=DEFAULT_CONFIG):
     """
-    在训练集上训练，在独立评估集上测试
+    Train on a labelled training session and evaluate on an independent E session.
 
-    Args:
-        train_subject: 训练集被试 ID
-        eval_subject: 评估集被试 ID
+    Training labels come from GDF events 769-772. Evaluation labels come from
+    true_labels/*.mat and are aligned through the retained trial indices.
     """
     print("\n" + "=" * 80)
-    print("独立测试集评估（修正版）")
-    print(f"训练集：{train_subject} | 测试集：{eval_subject}")
+    print("Independent evaluation with leakage-safe sklearn pipelines")
+    print(f"Train: {train_subject} | Eval: {eval_subject}")
     print("=" * 80)
 
-    # =====================================================================
-    #  Step 1: 处理训练集
-    # =====================================================================
+    dirs = ensure_result_dirs(eval_subject, config=config)
+
     print("\n" + "=" * 80)
-    print(f"【Step 1】处理训练集 {train_subject}")
+    print(f"Step 1: preprocess training set {train_subject}")
     print("=" * 80)
-
-    epochs_train, ica_train = complete_preprocessing_pipeline()
-
-    print(f"\n✅ 训练集预处理完成")
-    print(f"   - 试次数：{len(epochs_train)}")
-    print(f"   - 通道数：{len(epochs_train.ch_names)}")
-
-    # =====================================================================
-    #  Step 2: 提取训练集特征
-    # =====================================================================
-    print("\n" + "=" * 80)
-    print("【Step 2】提取训练集特征")
-    print("=" * 80)
-
-    # CSP 特征
-    X_csp_train, csp_model = extract_csp_features(epochs_train, n_components=4)
-
-    # 小波特征
-    X_wavelet_train = extract_wavelet_energy_features(epochs_train)
-
-    # 归一化
-    X_csp_train_norm, scaler_csp = normalize_features(X_csp_train)
-    X_wavelet_train_norm, scaler_wavelet = normalize_features(X_wavelet_train)
-
-    # 融合特征
-    X_fused_train = np.hstack([X_csp_train_norm, X_wavelet_train_norm])
-    print(f"   - 融合特征形状：{X_fused_train.shape}")
-
-    # 获取训练集标签（从 epochs.events 中）
-    y_train = epochs_train.events[:, 2]
-
-    # 同时加载训练集 .mat 标签用于验证
-    y_train_mat = load_true_labels(train_subject)
-    y_train_aligned = align_labels_with_epochs(epochs_train, y_train_mat)
-
-    # 验证标签映射关系
-    print("\n--- 验证训练集标签映射 ---")
-    event_to_class = {}
-    for evt_val, cls_val in zip(y_train, y_train_aligned):
-        if evt_val not in event_to_class:
-            event_to_class[evt_val] = cls_val
-    print(f"   - events 值 → class 映射：{event_to_class}")
-
-    # =====================================================================
-    #  Step 3: 训练 SVM 分类器
-    # =====================================================================
-    print("\n" + "=" * 80)
-    print("【Step 3】训练 SVM 分类器（使用 .mat 标签）")
-    print("=" * 80)
-
-    # 使用 .mat 的真实标签（1-4）进行训练
-    clf_fused, cv_scores, acc_mean = train_svm_classifier(
-        X_fused_train, y_train_aligned, cv_folds=10, kernel="rbf"
-    )
-    print(f"\n✅ 训练集交叉验证准确率：{acc_mean:.4f} ± {cv_scores.std():.4f}")
-
-    # 也训练单独特征的分类器用于对比
-    clf_csp, cv_csp, acc_csp = train_svm_classifier(
-        X_csp_train_norm, y_train_aligned, cv_folds=10
-    )
-    clf_wavelet, cv_wav, acc_wav = train_svm_classifier(
-        X_wavelet_train_norm, y_train_aligned, cv_folds=10
+    epochs_train, ica_train = complete_preprocessing_pipeline(
+        subject=train_subject,
+        data_root=data_root,
+        config=config,
     )
 
-    # =====================================================================
-    #  Step 4: 处理评估集
-    # =====================================================================
+    y_train_events = epochs_train.events[:, 2]
+    valid_mask = np.isin(y_train_events, TASK_EVENT_IDS)
+    if not np.all(valid_mask):
+        print(f"Warning: dropped {np.sum(~valid_mask)} non-task training epochs")
+        epochs_train = epochs_train[valid_mask]
+        y_train_events = y_train_events[valid_mask]
+    y_train = events_to_class_labels(y_train_events)
+
+    print("\nTraining set ready")
+    print(f"   - epochs: {len(epochs_train)}")
+    print(f"   - channels: {len(epochs_train.ch_names)}")
+    print(f"   - labels: {dict(zip(*np.unique(y_train, return_counts=True)))}")
+
     print("\n" + "=" * 80)
-    print(f"【Step 4】处理评估集 {eval_subject}")
+    print("Step 2: train leakage-safe EEG SVM pipelines")
     print("=" * 80)
+    classifiers = {}
+    cv_results = {}
+    for feature_set, display_name in [("csp", "CSP"), ("wavelet", "Wavelet"), ("fused", "Fused")]:
+        clf, scores, mean_acc = train_eeg_svm_pipeline(
+            epochs_train,
+            y_train,
+            feature_set=feature_set,
+            cv_folds=config.cv_folds,
+            n_csp_components=config.csp_components,
+            wavelet=config.wavelet,
+            wavelet_level=config.wavelet_level,
+            kernel=config.svm_kernel,
+            random_state=config.random_state,
+        )
+        classifiers[display_name] = clf
+        cv_results[display_name] = {"scores": scores, "mean": mean_acc, "std": scores.std()}
 
-    epochs_test, ica_test = preprocess_evaluation_set(eval_subject)
-
-    # =====================================================================
-    #  Step 5: 加载评估集真实标签
-    # =====================================================================
     print("\n" + "=" * 80)
-    print("【Step 5】加载评估集真实标签")
+    print(f"Step 3: preprocess evaluation set {eval_subject}")
     print("=" * 80)
+    epochs_test, ica_test = preprocess_evaluation_set(eval_subject, data_root=data_root, config=config)
 
+    print("\n" + "=" * 80)
+    print("Step 4: load and align evaluation labels")
+    print("=" * 80)
     y_test_all = load_true_labels(eval_subject)
     y_test = align_labels_with_epochs(epochs_test, y_test_all)
 
-    # =====================================================================
-    #  Step 6: 提取评估集特征
-    # =====================================================================
     print("\n" + "=" * 80)
-    print("【Step 6】提取评估集特征")
+    print("Step 5: predict and evaluate")
     print("=" * 80)
-
-    # CSP 特征
-    X_csp_test, _ = extract_csp_features(epochs_test, n_components=4)
-
-    # 小波特征
-    X_wavelet_test = extract_wavelet_energy_features(epochs_test)
-
-    # 使用训练集的归一化器
-    X_csp_test_norm = scaler_csp.transform(X_csp_test)
-    X_wavelet_test_norm = scaler_wavelet.transform(X_wavelet_test)
-
-    # 融合特征
-    X_fused_test = np.hstack([X_csp_test_norm, X_wavelet_test_norm])
-    print(f"   - 融合测试特征形状：{X_fused_test.shape}")
-
-    # =====================================================================
-    #  Step 7: 在评估集上预测与评估
-    # =====================================================================
-    print("\n" + "=" * 80)
-    print("【Step 7】在评估集上预测与评估")
-    print("=" * 80)
-
-    target_names = ["左手", "右手", "双脚", "舌头"]
-
     results = {}
-
-    for name, clf, X_test in [
-        ("CSP", clf_csp, X_csp_test_norm),
-        ("小波", clf_wavelet, X_wavelet_test_norm),
-        ("融合", clf_fused, X_fused_test),
-    ]:
-        print(f"\n--- {name}特征 ---")
-        y_pred = clf.predict(X_test)
-
+    for name, clf in classifiers.items():
+        print(f"\n--- {name} features ---")
+        y_pred = clf.predict(epochs_test.get_data())
         acc = accuracy_score(y_test, y_pred)
         kappa = cohen_kappa_score(y_test, y_pred)
-        cm = confusion_matrix(y_test, y_pred)
+        cm = confusion_matrix(y_test, y_pred, labels=TASK_CLASS_IDS)
 
-        print(f"   准确率：{acc:.4f}")
-        print(f"   Kappa：{kappa:.4f}")
-        print(f"\n{classification_report(y_test, y_pred, target_names=target_names)}")
+        print(f"   Accuracy: {acc:.4f}")
+        print(f"   Kappa: {kappa:.4f}")
+        print(f"\n{classification_report(y_test, y_pred, labels=TASK_CLASS_IDS, target_names=TASK_CLASS_NAMES, zero_division=0)}")
 
         results[name] = {
             "accuracy": acc,
@@ -414,82 +360,50 @@ def train_and_evaluate(train_subject="A01T", eval_subject="A01E"):
             "y_pred": y_pred,
         }
 
-    # 绘制融合特征的混淆矩阵
-    cm_fused = results["融合"]["confusion_matrix"]
-    save_path = f"./{eval_subject}_test_confusion_matrix.png"
-    plot_confusion_matrix(cm_fused, class_names=target_names, save_path=save_path)
+    cm_path = dirs["figures"] / f"{eval_subject}_test_confusion_matrix.png"
+    plot_confusion_matrix(results["Fused"]["confusion_matrix"], class_names=TASK_CLASS_NAMES, save_path=str(cm_path))
 
-    # =====================================================================
-    #  Step 8: 结果汇总
-    # =====================================================================
     print("\n" + "=" * 80)
-    print("【Step 8】结果汇总")
+    print("Step 6: summary")
     print("=" * 80)
+    for name in ("CSP", "Wavelet", "Fused"):
+        print(
+            f"{name:7s} CV: {cv_results[name]['mean']:.4f} +/- {cv_results[name]['std']:.4f} | "
+            f"Eval: {results[name]['accuracy']:.4f} | Kappa: {results[name]['kappa']:.4f}"
+        )
 
-    print(f"""
-╔══════════════════════════════════════════════════════════════╗
-║                     性能对比总结                              ║
-╠══════════════════════════════════════════════════════════════╣
-║  训练集 ({train_subject})                                     ║
-║    - 试次数：{len(epochs_train):>3d}                                          ║
-║    - CSP   交叉验证准确率：{acc_csp:.4f} ± {cv_csp.std():.4f}               ║
-║    - 小波  交叉验证准确率：{acc_wav:.4f} ± {cv_wav.std():.4f}               ║
-║    - 融合  交叉验证准确率：{acc_mean:.4f} ± {cv_scores.std():.4f}            ║
-║                                                              ║
-║  评估集 ({eval_subject})                                      ║
-║    - 试次数：{len(epochs_test):>3d}                                          ║
-║    - CSP   测试准确率：{results['CSP']['accuracy']:.4f}  Kappa: {results['CSP']['kappa']:.4f}         ║
-║    - 小波  测试准确率：{results['小波']['accuracy']:.4f}  Kappa: {results['小波']['kappa']:.4f}         ║
-║    - 融合  测试准确率：{results['融合']['accuracy']:.4f}  Kappa: {results['融合']['kappa']:.4f}         ║
-╚══════════════════════════════════════════════════════════════╝
-    """)
-
-    # 泛化能力分析
-    gap = acc_mean - results["融合"]["accuracy"]
+    gap = cv_results["Fused"]["mean"] - results["Fused"]["accuracy"]
     if abs(gap) < 0.05:
-        print(f"✅ 泛化能力优秀！训练-测试差异很小 ({gap:+.4f})")
+        print(f"Generalization looks strong; CV/eval gap is small ({gap:+.4f})")
     elif abs(gap) < 0.10:
-        print(f"⚠️  泛化能力良好，存在轻微过拟合 ({gap:+.4f})")
+        print(f"Generalization is acceptable; mild gap detected ({gap:+.4f})")
     else:
-        print(f"❗ 存在过拟合迹象，差异较大 ({gap:+.4f})")
-
-    # =====================================================================
-    #  Step 9: 保存结果
-    # =====================================================================
-    print("\n" + "=" * 80)
-    print("【Step 9】保存结果")
-    print("=" * 80)
+        print(f"Potential overfitting; CV/eval gap is large ({gap:+.4f})")
 
     save_data = {
+        "config": config,
         "train": {
             "subject": train_subject,
             "n_epochs": len(epochs_train),
-            "cv_accuracy_csp": acc_csp,
-            "cv_accuracy_wavelet": acc_wav,
-            "cv_accuracy_fused": acc_mean,
+            "cv_results": cv_results,
         },
         "test": {
             "subject": eval_subject,
             "n_epochs": len(epochs_test),
             "results": {
-                k: {"accuracy": v["accuracy"], "kappa": v["kappa"]}
-                for k, v in results.items()
+                key: {"accuracy": value["accuracy"], "kappa": value["kappa"]}
+                for key, value in results.items()
             },
         },
-        "model": clf_fused,
-        "scalers": {"csp": scaler_csp, "wavelet": scaler_wavelet},
-        "predictions": {"y_test": y_test, "y_pred": results["融合"]["y_pred"]},
+        "models": classifiers,
+        "predictions": {"y_test": y_test, "y_pred": results["Fused"]["y_pred"]},
     }
 
-    results_path = f"./evaluation_results_{eval_subject}.pkl"
+    results_path = dirs["metrics"] / f"evaluation_results_{eval_subject}.pkl"
     with open(results_path, "wb") as f:
         pickle.dump(save_data, f)
-    print(f"✅ 结果已保存：{results_path}")
-
-    print("\n" + "=" * 80)
-    print("✅ 独立测试集评估完成！")
-    print("=" * 80)
-
+    print(f"Saved results: {results_path}")
+    print("\nIndependent evaluation complete")
     return save_data
 
 

@@ -9,6 +9,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 from .eeg_analysis import get_modified_raw_data  # 导入之前的处理函数
+try:
+    from code.config import DEFAULT_CONFIG, EEGPipelineConfig
+except ModuleNotFoundError:
+    import sys
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    from code.config import DEFAULT_CONFIG, EEGPipelineConfig
 
 # 设置中文字体（兼容 Linux/Windows/macOS）
 import platform
@@ -617,12 +625,22 @@ def plot_preprocessing_comparison(raw_original, raw_ica_filtered, raw_clean, raw
     return fig
 
 
-def complete_preprocessing_pipeline(subject='A01T'):
+def complete_preprocessing_pipeline(
+    subject='A01T',
+    data_root=None,
+    raw=None,
+    config: EEGPipelineConfig = DEFAULT_CONFIG,
+    plot_comparison=True,
+):
     """
     完整预处理流程
     
     Args:
         subject: 被试 ID，如 'A01T'
+        data_root: GDF 数据根目录，默认为项目下 BCICIV_2a_gdf
+        raw: 已加载 Raw 对象；提供时不再从磁盘读取
+        config: 统一配置对象
+        plot_comparison: 是否绘制预处理对比图
     
     Returns:
         epochs_final: 预处理后的 Epochs 对象
@@ -635,7 +653,7 @@ def complete_preprocessing_pipeline(subject='A01T'):
     
     # 1. 获取已处理的原始数据（通道映射已完成）
     print("Step 1: 获取已映射通道的原始数据")
-    raw = get_modified_raw_data(subject=subject)
+    raw = get_modified_raw_data(subject=subject, data_root=data_root, raw=raw)
     print(f"✅ 原始数据加载完成，通道数：{len(raw.ch_names)}")
     
     # 🔧 关键新增：无需 BioSig，直接使用 MNE 方法
@@ -648,7 +666,7 @@ def complete_preprocessing_pipeline(subject='A01T'):
     print("\n" + "=" * 40)
     print("Step 2: ICA 前轻度滤波")
     print("=" * 40)
-    raw_ica_filtered = filter_for_ica(raw, l_freq=1.0, h_freq=40.0)
+    raw_ica_filtered = filter_for_ica(raw, l_freq=config.ica_l_freq, h_freq=config.ica_h_freq)
     
     # 3. ICA 分解
     print("\n" + "=" * 40)
@@ -672,7 +690,7 @@ def complete_preprocessing_pipeline(subject='A01T'):
     print("\n" + "=" * 40)
     print("Step 6: 任务定制滤波")
     print("=" * 40)
-    raw_final = filter_for_task(raw_clean, l_freq=8.0, h_freq=30.0)
+    raw_final = filter_for_task(raw_clean, l_freq=config.task_l_freq, h_freq=config.task_h_freq)
     
     # 7. 重参考
     print("\n" + "=" * 40)
@@ -686,13 +704,18 @@ def complete_preprocessing_pipeline(subject='A01T'):
     print("=" * 40)
     
     # 使用 MNE 方法创建 epochs 并剔除伪迹
-    epochs_final = create_epochs_with_artifact_removal_mne(raw_final, tmin=0, tmax=4)
+    epochs_final = create_epochs_with_artifact_removal_mne(
+        raw_final,
+        tmin=config.epoch_tmin,
+        tmax=config.epoch_tmax,
+    )
     
     # 10. 可视化对比
     print("\n" + "=" * 40)
     print("Step 10: 可视化预处理效果")
     print("=" * 40)
-    plot_preprocessing_comparison(raw, raw_ica_filtered, raw_clean, raw_final)
+    if plot_comparison:
+        plot_preprocessing_comparison(raw, raw_ica_filtered, raw_clean, raw_final)
     
     print("\n" + "=" * 60)
     print("🎉 完整预处理流程完成！")
@@ -701,7 +724,7 @@ def complete_preprocessing_pipeline(subject='A01T'):
     print(f"   - 试次数：{len(epochs_final)}")
     print(f"   - 通道数：{len(epochs_final.ch_names)}")
     print(f"   - 时间点数：{epochs_final.get_data().shape[2]}")
-    print(f"   - 频段：8-30 Hz (运动想象相关)")
+    print(f"   - 频段：{config.task_l_freq:g}-{config.task_h_freq:g} Hz (运动想象相关)")
     
     return epochs_final, ica
 

@@ -8,11 +8,83 @@ SVM 分类器模块
 import numpy as np
 from sklearn.svm import SVC
 from sklearn.model_selection import cross_val_score, StratifiedKFold, GridSearchCV, cross_val_predict
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (
     accuracy_score, confusion_matrix, 
     classification_report, cohen_kappa_score
 )
 from matplotlib import pyplot as plt
+try:
+    from ..feature_extraction.eeg_transformers import EpochsToArray, make_feature_union
+except ImportError:
+    from feature_extraction.eeg_transformers import EpochsToArray, make_feature_union
+
+
+def make_eeg_svm_pipeline(
+    feature_set='fused',
+    n_csp_components=4,
+    wavelet='db4',
+    wavelet_level=4,
+    kernel='rbf',
+    random_state=42,
+):
+    """Create a leakage-safe EEG feature extraction + scaler + SVM pipeline."""
+
+    return Pipeline([
+        ('epochs_to_array', EpochsToArray()),
+        ('features', make_feature_union(
+            feature_set=feature_set,
+            n_csp_components=n_csp_components,
+            wavelet=wavelet,
+            wavelet_level=wavelet_level,
+        )),
+        ('scaler', StandardScaler()),
+        ('svm', SVC(kernel=kernel, random_state=random_state)),
+    ])
+
+
+def train_eeg_svm_pipeline(
+    epochs_or_data,
+    y,
+    feature_set='fused',
+    cv_folds=10,
+    n_csp_components=4,
+    wavelet='db4',
+    wavelet_level=4,
+    kernel='rbf',
+    random_state=42,
+):
+    """Train and cross-validate an EEG SVM pipeline without feature leakage."""
+
+    print("\n" + "=" * 60)
+    print(f"EEG SVM 管线训练（{feature_set} 特征，无泄漏 CV）")
+    print("=" * 60)
+
+    X = epochs_or_data.get_data() if hasattr(epochs_or_data, 'get_data') else epochs_or_data
+    y = np.asarray(y)
+    print(f"   - 输入数据形状：{np.asarray(X).shape}")
+    print(f"   - 样本数：{len(y)}")
+    print(f"   - 类别分布：{dict(zip(*np.unique(y, return_counts=True)))}")
+    print(f"   - 交叉验证折数：{cv_folds}")
+
+    pipeline = make_eeg_svm_pipeline(
+        feature_set=feature_set,
+        n_csp_components=n_csp_components,
+        wavelet=wavelet,
+        wavelet_level=wavelet_level,
+        kernel=kernel,
+        random_state=random_state,
+    )
+    cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+    cv_scores = cross_val_score(pipeline, X, y, cv=cv, scoring='accuracy')
+    pipeline.fit(X, y)
+
+    mean_accuracy = cv_scores.mean()
+    print("\nEEG SVM pipeline training complete")
+    print(f"   - CV accuracy: {mean_accuracy:.4f} +/- {cv_scores.std():.4f}")
+    print(f"   - Fold scores: {np.round(cv_scores, 4)}")
+    return pipeline, cv_scores, mean_accuracy
 
 
 def train_svm_classifier(X, y, cv_folds=10, kernel='rbf', random_state=42):

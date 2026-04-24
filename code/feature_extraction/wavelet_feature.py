@@ -7,6 +7,7 @@
 
 import numpy as np
 import pywt
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import platform
@@ -29,6 +30,33 @@ else:  # Linux
     ]
 
 plt.rcParams['axes.unicode_minus'] = False
+
+
+def _wavelet_energy_from_array(data, wavelet='db4', level=4):
+    """Extract wavelet energy features from (trials, channels, times) data."""
+
+    features_list = []
+    for trial_data in data:
+        trial_features = []
+        for channel_signal in trial_data:
+            coeffs = pywt.wavedec(channel_signal, wavelet, level=level)
+            trial_features.extend(float(np.sum(coeff ** 2)) for coeff in coeffs)
+        features_list.append(trial_features)
+    return np.asarray(features_list)
+
+
+class WaveletEnergyTransformer(BaseEstimator, TransformerMixin):
+    """sklearn-compatible wavelet energy feature extractor."""
+
+    def __init__(self, wavelet='db4', level=4):
+        self.wavelet = wavelet
+        self.level = level
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        return _wavelet_energy_from_array(np.asarray(X), self.wavelet, self.level)
 
 
 def extract_wavelet_energy_features(epochs, wavelet='db4', level=4):
@@ -63,27 +91,7 @@ def extract_wavelet_energy_features(epochs, wavelet='db4', level=4):
     for i, (band_name, (fmin, fmax)) in enumerate(freq_bands.items()):
         print(f"   - Level {i+1} ({band_name}): {fmin:.1f}-{fmax:.1f} Hz")
     
-    features_list = []
-    
-    for trial_idx in range(n_trials):
-        trial_features = []
-        
-        for ch_idx in range(n_channels):
-            signal = data[trial_idx, ch_idx, :]
-            
-            # 进行多层小波分解
-            coeffs = pywt.wavedec(signal, wavelet, level=level)
-            # coeffs = [cA_level, cD_level, cD_level-1, ..., cD_1]
-            # 例如 level=4: [cA4, cD4, cD3, cD2, cD1]
-            
-            # 计算每层的能量
-            for coeff in coeffs:
-                energy = np.sum(coeff ** 2)
-                trial_features.append(energy)
-        
-        features_list.append(trial_features)
-    
-    X_wavelet = np.array(features_list)
+    X_wavelet = _wavelet_energy_from_array(data, wavelet=wavelet, level=level)
     
     print("\n✅ 小波能量特征提取完成")
     print(f"   - 特征形状：{X_wavelet.shape}")

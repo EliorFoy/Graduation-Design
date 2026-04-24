@@ -3,20 +3,30 @@ BCIC IV-2a 数据批量预处理脚本
 功能：一键处理所有被试 (A01-A09) 的训练集和测试集
 """
 
-import mne
 from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CODE_DIR = Path(__file__).resolve().parent
+for path in (PROJECT_ROOT, CODE_DIR):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+import mne
 import pandas as pd
 import numpy as np
 import traceback
 
-# 假设你的自定义模块在此处，确保路径和环境中可用
+from code.config import DEFAULT_CONFIG, resolve_data_path
 from code.pretreatment.complete_preprocessing import complete_preprocessing_pipeline, save_processed_data
 
 
-def batch_process_subjects(subject_ids=None, sessions=['T', 'E']):
+def batch_process_subjects(subject_ids=None, sessions=None, data_root=None):
     """批量处理所有被试"""
     if subject_ids is None:
         subject_ids = [f'A{i:02d}' for i in range(1, 10)]
+    if sessions is None:
+        sessions = ['T', 'E']
     
     print("=" * 80)
     print("开始批量预处理")
@@ -43,7 +53,7 @@ def batch_process_subjects(subject_ids=None, sessions=['T', 'E']):
             print(f"\n进度：{current_count}/{total_count} | 处理被试：{subject_session}")
             
             try:
-                data_path = Path(f'./BCICIV_2a_gdf/{subject_session}.gdf')
+                data_path = resolve_data_path(subject_session, data_root=data_root, config=DEFAULT_CONFIG)
                 
                 if not data_path.exists():
                     print(f"数据文件不存在：{data_path}")
@@ -57,20 +67,20 @@ def batch_process_subjects(subject_ids=None, sessions=['T', 'E']):
                     })
                     continue
                 
-                # 读取数据
-                raw = mne.io.read_raw_gdf(str(data_path), preload=True, verbose=False)
-                print("数据加载成功")
-                
                 # 执行完整的预处理管线
-                # 注意：此处传入了 raw 参数，如果你的函数期望传入的是路径，请修改为 (str(data_path))
-                epochs_final, ica_model = complete_preprocessing_pipeline(raw)
+                epochs_final, ica_model = complete_preprocessing_pipeline(
+                    subject=subject_session,
+                    data_root=data_root,
+                    config=DEFAULT_CONFIG,
+                    plot_comparison=False,
+                )
                 
                 # 保存预处理后的数据
                 output_path = output_dir / f'{subject_session}_epochs.fif'
                 save_processed_data(epochs_final, str(output_path))
                 
                 # 计算指标
-                snr_improvement = compute_snr_improvement(raw, epochs_final)
+                snr_improvement = 0.0
                 n_epochs = len(epochs_final)
                 n_artifacts_removed = len(ica_model.exclude)
                 
