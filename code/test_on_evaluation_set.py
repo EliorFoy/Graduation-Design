@@ -145,9 +145,12 @@ def create_epochs_for_evaluation(raw_final, tmin=0, tmax=4, baseline=None, trial
         event_repeated="drop",
     )
 
+    # 【关键修复】只保留 EEG 通道，剔除 EOG 通道
+    epochs.pick_types(eeg=True, exclude=[])
+
     print(f"\n✅ 评估集分段完成")
     print(f"   - Epochs 数：{len(epochs)}")
-    print(f"   - 通道数：{len(epochs.ch_names)}")
+    print(f"   - 通道数：{len(epochs.ch_names)} (仅 EEG)")
 
     epochs.metadata = {
         "trial_index": epochs.selection.astype(int),
