@@ -55,15 +55,45 @@ def train_eeg_svm_pipeline(
     kernel='rbf',
     random_state=42,
 ):
-    """Train and cross-validate an EEG SVM pipeline without feature leakage."""
+    """
+    训练并交叉验证 EEG SVM Pipeline（无特征泄漏）
+    
+    Args:
+        epochs_or_data: MNE Epochs 对象或数组数据
+        y: 标签向量
+        feature_set: 特征集类型 ('csp', 'wavelet', 'fused')
+        cv_folds: 交叉验证折数
+        n_csp_components: CSP 成分数
+        wavelet: 小波基类型
+        wavelet_level: 小波分解层数
+        kernel: SVM 核函数
+        random_state: 随机种子
+    
+    Returns:
+        pipeline: 训练好的 Pipeline
+        cv_scores: 交叉验证得分数组
+        mean_accuracy: 平均准确率
+    """
 
     print("\n" + "=" * 60)
     print(f"EEG SVM 管线训练（{feature_set} 特征，无泄漏 CV）")
     print("=" * 60)
 
-    X = epochs_or_data.get_data() if hasattr(epochs_or_data, 'get_data') else epochs_or_data
+    # 【关键修复】显式将 Epochs 转为三维数组，避免 cross_val_score 索引时维度丢失
+    if hasattr(epochs_or_data, 'get_data'):
+        X = epochs_or_data.get_data()  # 三维数组 (n_trials, n_channels, n_times)
+        print(f"   - 输入数据类型：Epochs → numpy.ndarray")
+        print(f"   - 数据形状：{X.shape}")
+    else:
+        X = np.asarray(epochs_or_data)
+        print(f"   - 输入数据类型：numpy.ndarray")
+        print(f"   - 数据形状：{X.shape}")
+    
+    # 确认形状为 3D
+    if X.ndim != 3:
+        raise ValueError(f"CSP 需要 3D 输入 (n_trials, n_channels, n_times)，但收到 {X.ndim}D 数据，形状：{X.shape}")
+    
     y = np.asarray(y)
-    print(f"   - 输入数据形状：{np.asarray(X).shape}")
     print(f"   - 样本数：{len(y)}")
     print(f"   - 类别分布：{dict(zip(*np.unique(y, return_counts=True)))}")
     print(f"   - 交叉验证折数：{cv_folds}")
@@ -78,18 +108,22 @@ def train_eeg_svm_pipeline(
     )
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
     cv_scores = cross_val_score(pipeline, X, y, cv=cv, scoring='accuracy')
+    
+    # 【关键修复】在全部数据上拟合 Pipeline（包含特征提取、标准化、分类）
     pipeline.fit(X, y)
 
     mean_accuracy = cv_scores.mean()
-    print("\nEEG SVM pipeline training complete")
-    print(f"   - CV accuracy: {mean_accuracy:.4f} +/- {cv_scores.std():.4f}")
-    print(f"   - Fold scores: {np.round(cv_scores, 4)}")
+    print("\n✅ EEG SVM Pipeline 训练完成")
+    print(f"   - CV 准确率：{mean_accuracy:.4f} ± {cv_scores.std():.4f}")
+    print(f"   - 各折得分：{np.round(cv_scores, 4)}")
     return pipeline, cv_scores, mean_accuracy
 
 
-def train_svm_classifier(X, y, cv_folds=10, kernel='rbf', random_state=42):
+def train_svm_classifier(X, y, cv_folds=10, kernel='rbf', random_state=42, auto_scale=True):
     """
     训练 SVM 分类器并评估
+    
+    ⚠️  重要：SVM 对特征尺度敏感，建议启用 auto_scale 或预先标准化输入。
     
     Args:
         X: 特征矩阵 (n_trials, n_features)
@@ -97,9 +131,10 @@ def train_svm_classifier(X, y, cv_folds=10, kernel='rbf', random_state=42):
         cv_folds: 交叉验证折数（默认 10）
         kernel: 核函数类型（'rbf', 'linear', 'poly'）
         random_state: 随机种子
+        auto_scale: 是否自动添加 StandardScaler（推荐 True）
     
     Returns:
-        clf: 训练好的 SVM 模型
+        clf: 训练好的 SVM 模型（若 auto_scale=True，返回 Pipeline）
         cv_scores: 交叉验证得分数组
         mean_accuracy: 平均准确率
     """
@@ -113,9 +148,21 @@ def train_svm_classifier(X, y, cv_folds=10, kernel='rbf', random_state=42):
     print(f"   - 类别分布：{np.bincount(y)}")
     print(f"   - 交叉验证折数：{cv_folds}")
     print(f"   - 核函数：{kernel}")
+    print(f"   - 自动标准化：{auto_scale}")
     
-    # 创建 SVM 分类器
-    clf = SVC(kernel=kernel, random_state=random_state)
+    # 【关键修复】创建带标准化的 Pipeline 或直接使用 SVC
+    if auto_scale:
+        from sklearn.pipeline import Pipeline as SklearnPipeline
+        from sklearn.preprocessing import StandardScaler
+        
+        clf = SklearnPipeline([
+            ('scaler', StandardScaler()),
+            ('svm', SVC(kernel=kernel, random_state=random_state))
+        ])
+        print("   ✅ 已启用自动标准化（StandardScaler）")
+    else:
+        clf = SVC(kernel=kernel, random_state=random_state)
+        print("   ⚠️  警告：未启用自动标准化，请确保输入特征已标准化")
     
     # 分层 K 折交叉验证（保持各类别比例）
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
@@ -136,18 +183,21 @@ def train_svm_classifier(X, y, cv_folds=10, kernel='rbf', random_state=42):
     return clf, cv_scores, mean_accuracy
 
 
-def optimize_svm_hyperparameters(X, y, cv_folds=10, param_grid=None):
+def optimize_svm_hyperparameters(X, y, cv_folds=10, param_grid=None, auto_scale=True):
     """
     使用网格搜索优化 SVM 超参数
+    
+    ⚠️  重要：默认启用自动标准化，避免特征尺度影响搜索结果。
     
     Args:
         X: 特征矩阵
         y: 标签向量
         cv_folds: 交叉验证折数
         param_grid: 参数网格（为 None 则使用默认配置）
+        auto_scale: 是否自动添加 StandardScaler（推荐 True）
     
     Returns:
-        best_clf: 最优参数的 SVM 模型
+        best_clf: 最优参数的 SVM 模型（Pipeline 或 SVC）
         best_params: 最优参数组合
         best_score: 最优交叉验证得分
     """
@@ -166,10 +216,30 @@ def optimize_svm_hyperparameters(X, y, cv_folds=10, param_grid=None):
     print("   - 参数搜索空间:")
     for param, values in param_grid.items():
         print(f"     {param}: {values}")
+    print(f"   - 自动标准化：{auto_scale}")
+    
+    # 【关键修复】构建带标准化的 Pipeline
+    if auto_scale:
+        from sklearn.pipeline import Pipeline as SklearnPipeline
+        from sklearn.preprocessing import StandardScaler
+        
+        base_estimator = SklearnPipeline([
+            ('scaler', StandardScaler()),
+            ('svm', SVC(random_state=42))
+        ])
+        # 调整参数网格，添加 'svm__' 前缀
+        scaled_param_grid = {}
+        for key, values in param_grid.items():
+            scaled_param_grid[f'svm__{key}'] = values
+        param_grid = scaled_param_grid
+        print("   ✅ 已启用自动标准化（StandardScaler）")
+    else:
+        base_estimator = SVC(random_state=42)
+        print("   ⚠️  警告：未启用自动标准化，请确保输入特征已标准化")
     
     # 创建网格搜索对象
     grid_search = GridSearchCV(
-        SVC(random_state=42),
+        base_estimator,
         param_grid,
         cv=cv_folds,
         scoring='accuracy',
@@ -177,8 +247,12 @@ def optimize_svm_hyperparameters(X, y, cv_folds=10, param_grid=None):
     )
     
     # 执行网格搜索
-    print("\n正在进行网格搜索...")
-    grid_search.fit(X, y)
+    try:
+        print("\n正在进行网格搜索...")
+        grid_search.fit(X, y)
+    except Exception as e:
+        print(f"\n❌ 网格搜索失败：{e}")
+        raise
     
     best_params = grid_search.best_params_
     best_score = grid_search.best_score_
@@ -267,8 +341,14 @@ def plot_confusion_matrix(cm, class_names=None, save_path='./output_img/confusio
         print(f"   将使用默认类别名称")
         class_names = [f'Class {i+1}' for i in range(n_classes)]
     
-    # 归一化（转换为百分比）
-    cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis] * 100
+    # 【优化】安全归一化，避免除零错误
+    row_sums = cm.sum(axis=1)
+    cm_normalized = np.zeros_like(cm, dtype=float)
+    for i in range(n_classes):
+        if row_sums[i] > 0:
+            cm_normalized[i] = cm[i].astype('float') / row_sums[i] * 100
+        else:
+            print(f"   ⚠️  警告：类别 {i} 在真实标签中未出现，归一化结果为 NaN")
     
     fig, ax = plt.subplots(figsize=(8, 6))
     
@@ -314,17 +394,25 @@ def plot_cv_results(cv_results, save_path='./output_img/cv_results.png'):
     params = cv_results['params']
     mean_scores = cv_results['mean_test_score']
     
+    # 【优化】仅当参数网格包含 RBF 核且有 gamma 参数时才绘制热力图
+    has_rbf = any('gamma' in str(p) or p.get('kernel') in [None, 'rbf'] for p in params)
+    
     # 提取 C 的值
-    C_values = sorted(list(set([p['C'] for p in params])))
+    C_values = sorted(list(set([p['C'] for p in params if 'C' in p])))
     
-    # 【修复 Bug】处理 gamma 包含字符串 (如 'scale') 和浮点数混合排序的问题
-    def gamma_sort_key(g):
-        return g if isinstance(g, (int, float)) else float('inf')
+    gamma_values = []
     
-    gamma_values = sorted(list(set([p.get('gamma') for p in params if 'gamma' in p])), key=gamma_sort_key)
+    if has_rbf:
+        # 【修复】更健壮的 gamma 值提取和排序
+        gamma_raw = [p.get('gamma') for p in params if 'gamma' in p and p.get('gamma') is not None]
+        if gamma_raw:
+            # 分离数值型和字符串型 gamma
+            numeric_gammas = sorted([g for g in gamma_raw if isinstance(g, (int, float))])
+            string_gammas = sorted([str(g) for g in gamma_raw if not isinstance(g, (int, float))])
+            gamma_values = numeric_gammas + string_gammas
     
     if len(C_values) > 1 and len(gamma_values) > 1:
-        # 绘制热力图
+        # 绘制 C-gamma 热力图
         C_gamma_scores = np.zeros((len(C_values), len(gamma_values)))
         
         for i, C in enumerate(C_values):
