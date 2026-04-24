@@ -1,4 +1,4 @@
-"""Shared configuration for the EEG motor imagery pipeline."""
+"""EEG 运动想象流水线的共享配置。"""
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class EEGPipelineConfig:
-    """Centralized defaults used by preprocessing, training, and evaluation."""
+    """预处理、训练和评估使用的集中化默认配置。"""
 
     project_root: Path = field(default_factory=lambda: Path(__file__).resolve().parent.parent)
     data_dir_name: str = "BCICIV_2a_gdf"
@@ -39,6 +39,7 @@ class EEGPipelineConfig:
         return self.project_root / self.results_dir_name
 
     def subject_results_dir(self, subject_id: str) -> Path:
+        """获取指定被试的结果目录路径。"""
         return self.results_root / subject_id
 
 
@@ -52,7 +53,7 @@ TASK_CLASS_NAMES = ["left hand", "right hand", "feet", "tongue"]
 
 
 def events_to_class_labels(events):
-    """Map BCI IV 2a event ids 769-772 to class labels 1-4."""
+    """将 BCI IV 2a 事件 ID (769-772) 映射为类别标签 (1-4)。"""
 
     import numpy as np
 
@@ -66,14 +67,14 @@ def events_to_class_labels(events):
     return labels
 
 def resolve_data_path(subject: str, data_root=None, config: EEGPipelineConfig = DEFAULT_CONFIG) -> Path:
-    """Resolve a BCI IV 2a GDF path from a subject/session id."""
+    """根据被试/会话 ID 解析 BCI IV 2a GDF 文件路径。"""
 
     root = Path(data_root) if data_root is not None else config.data_root
     return root / f"{subject}.gdf"
 
 
 def ensure_result_dirs(subject_id: str, config: EEGPipelineConfig = DEFAULT_CONFIG) -> dict[str, Path]:
-    """Create and return standard result subdirectories for a subject/session."""
+    """创建并返回被试/会话的标准结果子目录。"""
 
     base = config.subject_results_dir(subject_id)
     dirs = {

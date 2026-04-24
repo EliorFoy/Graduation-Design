@@ -81,12 +81,12 @@ def extract_csp_features(epochs, n_components=4, reg_param=0.0):
             # 协方差矩阵：R = (X @ X.T) / trace(X @ X.T)
             cov = np.cov(trial_data)
             
-            # 【修复】迹归一化（极其重要，原代码缺失）
-            cov = cov / np.trace(cov)
-            
-            # 添加正则化
+            # 【修复】先添加正则化，再进行迹归一化
             if reg_param > 0:
                 cov += reg_param * np.eye(n_channels)
+            
+            # 迹归一化（极其重要）
+            cov = cov / np.trace(cov)
             
             cov_matrices.append(cov)
         
@@ -98,7 +98,7 @@ def extract_csp_features(epochs, n_components=4, reg_param=0.0):
     for label in unique_labels:
         R_total += class_covariances[label]
     
-    # 3. 白化变换
+    # 3. 白化变换（增加数值稳定性处理）
     eigenvalues, eigenvectors = eigh(R_total)
     
     # 排序（从大到小）
@@ -106,7 +106,8 @@ def extract_csp_features(epochs, n_components=4, reg_param=0.0):
     eigenvalues = eigenvalues[idx]
     eigenvectors = eigenvectors[:, idx]
     
-    # 白化矩阵：W = D^(-1/2) @ E.T
+    # 【优化】处理极小特征值，避免除零
+    eigenvalues[eigenvalues < 1e-10] = 0
     D_inv_sqrt = np.diag(1.0 / np.sqrt(eigenvalues + 1e-10))
     W = D_inv_sqrt @ eigenvectors.T
     
@@ -130,13 +131,18 @@ def extract_csp_features(epochs, n_components=4, reg_param=0.0):
         # 构建所有的 CSP 滤波器
         V = eigenvectors_proj.T @ W
         
-        # 修复逻辑：CSP必须同时提取特征值最大（对类1敏感）和最小（对类2敏感）的两端滤波器
+        # 【修复】CSP 必须同时提取特征值最大和最小的两端滤波器
         half_n = n_components // 2
         if n_components % 2 != 0:
-            half_n = (n_components + 1) // 2
+            print(f"   ⚠️  提示：二分类 CSP 成分数为奇数 ({n_components})，将取 {half_n + 1} 个最大 + {half_n} 个最小")
+            top_count = half_n + 1
+            bottom_count = half_n
+        else:
+            top_count = half_n
+            bottom_count = half_n
             
-        top_idx = list(range(half_n))
-        bottom_idx = list(range(V.shape[0] - (n_components - half_n), V.shape[0]))
+        top_idx = list(range(top_count))
+        bottom_idx = list(range(V.shape[0] - bottom_count, V.shape[0]))
         selected_idx = top_idx + bottom_idx
         
         W_csp = V[selected_idx, :]
@@ -152,18 +158,40 @@ def extract_csp_features(epochs, n_components=4, reg_param=0.0):
             P_i = P_list[i]
             # 计算除自己外其他所有类的平均协方差
             P_others = np.mean([P_list[j] for j in range(len(unique_labels)) if j != i], axis=0)
-            P_diff = P_i - P_others
             
-            eigenvals, eigenvecs = eigh(P_diff)
+            # 【关键修复】使用广义特征值分解求解 CSP
+            # 目标：max w^T P_i w / w^T P_others w
+            # 等价于求解广义特征值问题：P_i v = λ P_others v
+            try:
+                eigenvals, eigenvecs = eigh(P_i, P_others)
+            except np.linalg.LinAlgError:
+                print(f"   ⚠️  警告：类 {unique_labels[i]} 的广义特征值分解失败，回退到标准分解")
+                # 如果 P_others 奇异，添加小的正则化项
+                P_others_reg = P_others + 1e-6 * np.eye(n_channels)
+                eigenvals, eigenvecs = eigh(P_i, P_others_reg)
+            
+            # 排序（从大到小）
             idx = np.argsort(eigenvals)[::-1]
             eigenvecs = eigenvecs[:, idx]
             eigenvals = eigenvals[idx]
             
             V = eigenvecs.T @ W
             
-            # 每个类取前 n_comp_per_class 个最大化自己方差的滤波器
-            W_csp_list.append(V[:n_comp_per_class, :])
-            selected_eigenvalues_list.extend(eigenvals[:n_comp_per_class])
+            # 【修复】每个类同时保留最大和最小的滤波器（增强判别力）
+            n_comp_half = max(1, n_comp_per_class // 2)
+            if n_comp_per_class % 2 != 0:
+                top_count = n_comp_half + 1
+                bottom_count = n_comp_half
+            else:
+                top_count = n_comp_half
+                bottom_count = n_comp_half
+            
+            top_idx = list(range(top_count))
+            bottom_idx = list(range(V.shape[0] - bottom_count, V.shape[0]))
+            selected_idx = top_idx + bottom_idx
+            
+            W_csp_list.append(V[selected_idx, :])
+            selected_eigenvalues_list.extend(eigenvals[selected_idx])
             
         W_csp = np.vstack(W_csp_list)
         selected_eigenvalues = np.array(selected_eigenvalues_list)

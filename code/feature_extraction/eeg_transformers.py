@@ -26,7 +26,23 @@ def make_feature_union(
     wavelet="db4",
     wavelet_level=4,
 ):
-    """Build a feature union for CSP, wavelet, or fused EEG features."""
+    """
+    构建 EEG 特征联合提取器（CSP、小波或融合）
+    
+    Args:
+        feature_set: 特征集类型 ('csp', 'wavelet', 'fused')
+        n_csp_components: CSP 成分数
+        wavelet: 小波基类型
+        wavelet_level: 小波分解层数
+    
+    Returns:
+        FeatureUnion: sklearn FeatureUnion 对象
+    
+    Note:
+        - MNECSPTransformer 和 WaveletEnergyTransformer 内部已通过 np.asarray() 处理 Epochs 转换
+        - 如需显式转换，可在 Pipeline 中添加 EpochsToArray() 作为第一步
+        - CSP 和小波特征维度可能差异较大（如 4 vs 110），建议在后续 Pipeline 中添加标准化
+    """
 
     transformers = []
     if feature_set in {"csp", "fused"}:

@@ -104,6 +104,8 @@ def extract_band_power_features(epochs, bands=None, wavelet='cmor1.5-1.0'):
     """
     提取标准频段的功率特征（使用连续小波变换）
     
+    ⚠️  注意：此函数计算效率极低，仅用于演示。推荐使用 extract_wavelet_energy_features()。
+    
     Args:
         epochs: Epochs 数据
         bands: 频段定义字典
@@ -147,9 +149,11 @@ def extract_band_power_features(epochs, bands=None, wavelet='cmor1.5-1.0'):
                 power = 0
                 
                 for freq in freqs:
-                    # 连续小波变换
-                    scales = pywt.frequency2scale(wavelet, freq / sfreq)
-                    coeffs = pywt.cwt(signal, scales, wavelet)[0]
+                    # 【关键修复】连续小波变换频率标度计算
+                    # pywt.frequency2scale 的第二个参数应为归一化频率 f/f_nyquist
+                    nyquist = sfreq / 2.0
+                    scale = pywt.frequency2scale(wavelet, freq / nyquist)
+                    coeffs = pywt.cwt(signal, [scale], wavelet)[0]
                     power += np.mean(np.abs(coeffs) ** 2)
                 
                 trial_features.append(power / len(freqs))
@@ -208,6 +212,7 @@ def compute_wavelet_freq_bands(sfreq, level):
     
     Returns:
         freq_bands: 有序字典，包含各层名称和频率范围
+                    顺序：A (最低频) → D1 (最高频)
     """
     # Nyquist 频率
     nyquist = sfreq / 2.0
@@ -220,16 +225,17 @@ def compute_wavelet_freq_bands(sfreq, level):
     for i in range(1, level + 1):
         f_low = f_high / 2.0
         
-        if i == 1:
+        # 【优化】基于实际频率动态命名，而非硬编码特定采样率的映射
+        if f_low >= 30:
             name = 'gamma'
-        elif i == 2:
-            name = 'beta_high'
-        elif i == 3:
-            name = 'beta_low+mu'
-        elif i == 4:
+        elif f_low >= 13:
+            name = 'beta'
+        elif f_low >= 8:
             name = 'mu+alpha'
+        elif f_low >= 4:
+            name = 'theta'
         else:
-            name = f'level{i}'
+            name = 'delta'
         
         freq_bands[f'D{i}'] = (f_low, f_high)
         f_high = f_low
@@ -279,7 +285,9 @@ def plot_wavelet_decomposition(signal, sfreq, wavelet='db4', level=4, save_path=
     axes[0].set_ylabel('Amplitude')
     
     # 2. 绘制近似系数 (cA_n) - 最低频
-    cA_rec = pywt.upcoef('a', coeffs[0], wavelet, level=level, take=len(signal))
+    # 【修复】使用 waverec 替代已移除的 upcoef
+    coeffs_A = [coeffs[0]] + [np.zeros_like(cD) for cD in coeffs[1:]]
+    cA_rec = pywt.waverec(coeffs_A, wavelet)[:len(signal)]
     fmin, fmax = freq_bands['A']
     axes[1].plot(times, cA_rec, 'r-', linewidth=0.8)
     axes[1].set_title(f'Approximation A{level} ({fmin:.1f}-{fmax:.1f} Hz)', fontsize=10)
@@ -289,7 +297,14 @@ def plot_wavelet_decomposition(signal, sfreq, wavelet='db4', level=4, save_path=
     # coeffs[1] 对应 cD_level, coeffs[2] 对应 cD_level-1 ... coeffs[-1] 对应 cD_1
     for i in range(1, level + 1):
         current_level = level - i + 1
-        cD_rec = pywt.upcoef('d', coeffs[i], wavelet, level=current_level, take=len(signal))
+        # 【修复】重建单级细节系数
+        coeffs_D = [np.zeros_like(coeffs[0])]  # cA 置零
+        for j in range(1, len(coeffs)):
+            if j == i:
+                coeffs_D.append(coeffs[j])  # 保留当前层的细节系数
+            else:
+                coeffs_D.append(np.zeros_like(coeffs[j]))  # 其他层置零
+        cD_rec = pywt.waverec(coeffs_D, wavelet)[:len(signal)]
         
         ax_idx = i + 1
         fmin, fmax = freq_bands[f'D{current_level}']
