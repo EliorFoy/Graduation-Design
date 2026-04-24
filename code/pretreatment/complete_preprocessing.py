@@ -429,140 +429,6 @@ def create_epochs_with_artifact_removal_mne(raw_final, tmin=0, tmax=4):
     return epochs
 
 
-def create_epochs(raw_final, event_id=None, tmin=0, tmax=4, baseline=None):
-    """
-    分段
-    
-    Args:
-        raw_final: 最终处理后的数据
-        event_id: 事件 ID 字典
-        tmin: 起始时间（相对于事件）
-        tmax: 结束时间
-        baseline: 基线校正（None 表示不做）
-    
-    Returns:
-        epochs: 分段后的 Epochs 对象
-    """
-    print("\n创建分段...")
-    
-    # 默认事件 ID（BCIC IV-2a）
-    if event_id is None:
-        event_id = {
-            'left': 769,
-            'right': 770,
-            'feet': 771,
-            'tongue': 772
-        }
-    
-    # 从 annotations 中提取事件（BCIC IV-2a 数据集使用 annotations 存储事件）
-    events, event_dict = mne.events_from_annotations(raw_final)
-    
-    print(f"   - 从 annotations 中提取到 {len(events)} 个事件")
-    print(f"   - 事件类型：{list(event_dict.keys())}")
-    print(f"   - 事件 ID 映射：{event_dict}")
-    
-    # 🔧 关键修复：只保留 4 类任务标记 [769, 770, 771, 772]
-    # 注意：MNE 会自动映射 annotations 到整数，需要找到对应的映射值
-    # 原始值 '769', '770', '771', '772' 会被映射到 event_dict 中的值
-    
-    # 找到 4 类任务对应的映射值
-    task_keys = ['769', '770', '771', '772']
-    valid_event_ids = [event_dict[k] for k in task_keys if k in event_dict]
-    
-    print(f"\n   🎯 任务事件 ID: {valid_event_ids}")
-    
-    # 过滤只保留任务事件
-    valid_mask = np.isin(events[:, 2], valid_event_ids)
-    
-    # 检查并报告
-    unique_events, counts = np.unique(events[:, 2], return_counts=True)
-    print(f"\n   📊 原始事件分布:")
-    for event_id, count in zip(unique_events, counts):
-        # 反向查找事件名称
-        event_name = '未知'
-        for k, v in event_dict.items():
-            if v == event_id:
-                event_name = k
-                break
-        print(f"      - {event_id} ({event_name}): {count} 个")
-    
-    if not np.all(valid_mask):
-        n_invalid = np.sum(~valid_mask)
-        print(f"\n   ⚠️  将过滤 {n_invalid} 个非任务事件")
-    
-    # 过滤 events
-    events_filtered = events[valid_mask]
-    
-    print(f"\n   ✅ 过滤后事件数：{len(events_filtered)}")
-    
-    # 创建 Epochs（使用过滤后的 events 和我们定义的 event_id）
-    # 重新创建 event_id 映射，只包含任务类别
-    event_id_final = {k: event_dict[k] for k in task_keys if k in event_dict}
-    
-    print(f"   📋 使用的事件 ID 映射：{event_id_final}")
-    
-    epochs = mne.Epochs(
-        raw_final, 
-        events_filtered, 
-        event_id=event_id_final,  # 使用我们定义的映射
-        tmin=tmin, 
-        tmax=tmax,
-        baseline=baseline,
-        preload=True,
-        verbose=False,
-        event_repeated='drop'  # 处理重复事件
-    )
-    
-    print(f"\n✅ 分段完成")
-    print(f"   - Epochs 数：{len(epochs)}")
-    print(f"   - 时间窗口：[{tmin}, {tmax}] s")
-    
-    return epochs
-
-
-def drop_artifact_epochs(epochs, events, artifact_codes=[1023]):
-    """
-    【已弃用】剔除官方标记的伪迹试次
-    
-    ⚠️  DEPRECATED: 此函数已不再使用。请使用 create_epochs_with_artifact_removal_mne() 代替。
-    新函数在创建 epochs 时同时完成伪迹剔除，避免了事件匹配错位问题。
-    
-    Args:
-        epochs: 分段后的数据
-        events: 事件数组
-        artifact_codes: 伪迹事件代码列表，默认 [1023]
-    
-    Returns:
-        epochs: 剔除伪迹后的 Epochs 对象
-    """
-    print("\n剔除伪迹试次...")
-    
-    # 创建要保留的试次的 mask（True 表示保留）
-    keep_mask = np.ones(len(epochs), dtype=bool)
-    
-    total_artifacts = 0
-    for artifact_code in artifact_codes:
-        # 找到伪迹事件的位置
-        artifact_mask = events[:, 2] == artifact_code
-        n_artifacts = np.sum(artifact_mask)
-        
-        if n_artifacts > 0:
-            # 找到这些伪迹事件对应的 epochs 索引
-            artifact_indices = np.where(artifact_mask)[0]
-            # 标记为不保留
-            keep_mask[artifact_indices] = False
-            print(f"   - 剔除了 {n_artifacts} 个事件代码为 {artifact_code} 的试次")
-            total_artifacts += n_artifacts
-    
-    if total_artifacts > 0:
-        # 使用索引切片方式剔除试次（关键：这样会自动更新 events 数组）
-        epochs = epochs[keep_mask].copy()
-        print(f"✅ 总共剔除了 {total_artifacts} 个伪迹试次")
-        print(f"   - 剩余 Epochs 数：{len(epochs)}")
-    else:
-        print(f"ℹ️  未检测到伪迹试次标记")
-    
-    return epochs
 
 
 def plot_preprocessing_comparison(raw_original, raw_ica_filtered, raw_clean, raw_final, save_path='./output_img/preprocessing_comparison.png'):
@@ -635,26 +501,32 @@ def plot_preprocessing_comparison(raw_original, raw_ica_filtered, raw_clean, raw
     
     times = np.linspace(start_time, start_time + duration, end_sample - start_sample) * 1000  # ms
     
-    axes[0, 1].plot(times, raw_original.get_data()[0, start_sample:end_sample] * 1e6, 
+    # 【关键修复】确保提取的是 EEG 通道，避免索引 0 可能是 EOG
+    eeg_data_orig = raw_original.copy().pick_types(eeg=True).get_data()
+    eeg_data_ica = raw_ica_filtered.copy().pick_types(eeg=True).get_data()
+    eeg_data_clean = raw_clean.copy().pick_types(eeg=True).get_data()
+    eeg_data_final = raw_final.copy().pick_types(eeg=True).get_data()
+    
+    axes[0, 1].plot(times, eeg_data_orig[0, start_sample:end_sample] * 1e6, 
                      alpha=0.7, linewidth=0.5)
     axes[0, 1].set_title('原始信号 (通道 1)')
     axes[0, 1].set_xlabel('时间 (ms)')
     axes[0, 1].set_ylabel('幅度 (μV)')
     axes[0, 1].grid(True, alpha=0.3)
     
-    axes[1, 1].plot(times, raw_ica_filtered.get_data()[0, start_sample:end_sample] * 1e6, 
+    axes[1, 1].plot(times, eeg_data_ica[0, start_sample:end_sample] * 1e6, 
                      alpha=0.7, linewidth=0.5, color='orange')
     axes[1, 1].set_title('ICA 前滤波信号 (通道 1)')
     axes[1, 1].set_xlabel('时间 (ms)')
     axes[1, 1].grid(True, alpha=0.3)
     
-    axes[2, 1].plot(times, raw_clean.get_data()[0, start_sample:end_sample] * 1e6, 
+    axes[2, 1].plot(times, eeg_data_clean[0, start_sample:end_sample] * 1e6, 
                      alpha=0.7, linewidth=0.5, color='green')
     axes[2, 1].set_title('ICA 去噪后信号 (通道 1)')
     axes[2, 1].set_xlabel('时间 (ms)')
     axes[2, 1].grid(True, alpha=0.3)
     
-    axes[3, 1].plot(times, raw_final.get_data()[0, start_sample:end_sample] * 1e6, 
+    axes[3, 1].plot(times, eeg_data_final[0, start_sample:end_sample] * 1e6, 
                      alpha=0.7, linewidth=0.5, color='red')
     axes[3, 1].set_title('最终滤波信号 (8-30Hz, 通道 1)')
     axes[3, 1].set_xlabel('时间 (ms)')
