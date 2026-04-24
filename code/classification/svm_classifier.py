@@ -28,6 +28,7 @@ def make_eeg_svm_pipeline(
     wavelet_level=4,
     kernel='rbf',
     random_state=42,
+    motor_channels_only=False,  # 【新增】是否只使用运动区通道
 ):
     """Create a leakage-safe EEG feature extraction + scaler + SVM pipeline."""
 
@@ -38,6 +39,7 @@ def make_eeg_svm_pipeline(
             n_csp_components=n_csp_components,
             wavelet=wavelet,
             wavelet_level=wavelet_level,
+            motor_channels_only=motor_channels_only,  # 【传递参数】
         )),
         ('scaler', StandardScaler()),
         ('svm', SVC(kernel=kernel, random_state=random_state)),
@@ -55,6 +57,7 @@ def train_eeg_svm_pipeline(
     kernel='rbf',
     random_state=42,
     freq_bands=None,  # 【新增】用于 FBCSP
+    motor_channels_only=False,  # 【新增】是否只使用运动区通道
 ):
     """
     训练并交叉验证 EEG SVM Pipeline（无特征泄漏）
@@ -70,6 +73,7 @@ def train_eeg_svm_pipeline(
         kernel: SVM 核函数
         random_state: 随机种子
         freq_bands: FBCSP 频段列表，如 [(8,12), (12,16), ...]
+        motor_channels_only: 是否只使用运动区通道 (C3, Cz, C4)
     
     Returns:
         pipeline: 训练好的 Pipeline
@@ -138,6 +142,7 @@ def train_eeg_svm_pipeline(
             wavelet_level=wavelet_level,
             kernel=kernel,
             random_state=random_state,
+            motor_channels_only=motor_channels_only,  # 【传递参数】
         )
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
     cv_scores = cross_val_score(pipeline, X, y, cv=cv, scoring='accuracy')

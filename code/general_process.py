@@ -122,11 +122,22 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
     )
 
     # 6.3 使用融合特征
-    print("\n--- 使用融合特征 ---")
+    print("\n--- 使用融合特征（全通道） ---")
     clf_fused, cv_scores_fused, acc_fused = train_eeg_svm_pipeline(
         epochs, y, feature_set="fused", cv_folds=DEFAULT_CONFIG.cv_folds,
         n_csp_components=DEFAULT_CONFIG.csp_components,
         wavelet=DEFAULT_CONFIG.wavelet, wavelet_level=DEFAULT_CONFIG.wavelet_level,
+        motor_channels_only=False,  # 全通道
+        random_state=DEFAULT_CONFIG.random_state,
+    )
+    
+    # 6.3b 【优化】使用融合特征（仅运动区通道）
+    print("\n--- 使用融合特征（运动区通道 C3/Cz/C4） ---")
+    clf_fused_motor, cv_scores_fused_motor, acc_fused_motor = train_eeg_svm_pipeline(
+        epochs, y, feature_set="fused", cv_folds=DEFAULT_CONFIG.cv_folds,
+        n_csp_components=DEFAULT_CONFIG.csp_components,
+        wavelet=DEFAULT_CONFIG.wavelet, wavelet_level=DEFAULT_CONFIG.wavelet_level,
+        motor_channels_only=True,  # ⭐ 启用运动区通道
         random_state=DEFAULT_CONFIG.random_state,
     )
 
@@ -147,18 +158,21 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
     print("\n" + "=" * 60)
     print("分类性能对比")
     print("=" * 60)
-    print(f"CSP 特征准确率：     {acc_csp:.4f} ± {cv_scores_csp.std():.4f}")
-    print(f"小波特征准确率：   {acc_wavelet:.4f} ± {cv_scores_wavelet.std():.4f}")
-    print(f"融合特征准确率：   {acc_fused:.4f} ± {cv_scores_fused.std():.4f}")
-    print(f"FBCSP 特征准确率： {acc_fbcsp:.4f} ± {cv_scores_fbcsp.std():.4f}")
+    print(f"CSP 特征准确率：         {acc_csp:.4f} ± {cv_scores_csp.std():.4f}")
+    print(f"小波特征准确率：       {acc_wavelet:.4f} ± {cv_scores_wavelet.std():.4f}")
+    print(f"融合特征准确率（全通道）： {acc_fused:.4f} ± {cv_scores_fused.std():.4f}")
+    print(f"融合特征准确率（运动区）： {acc_fused_motor:.4f} ± {cv_scores_fused_motor.std():.4f}")
+    print(f"FBCSP 特征准确率：     {acc_fbcsp:.4f} ± {cv_scores_fbcsp.std():.4f}")
     print("=" * 60)
 
     # 找出最佳特征
-    best_acc = max(acc_csp, acc_wavelet, acc_fused, acc_fbcsp)
+    best_acc = max(acc_csp, acc_wavelet, acc_fused, acc_fused_motor, acc_fbcsp)
     if best_acc == acc_fbcsp:
         print(f"\n🏆 FBCSP 特征表现最佳！")
+    elif best_acc == acc_fused_motor:
+        print(f"\n🏆 融合特征（运动区）表现最佳！")
     elif best_acc == acc_fused:
-        print(f"\n🏆 融合特征表现最佳！")
+        print(f"\n🏆 融合特征（全通道）表现最佳！")
     elif best_acc == acc_csp:
         print(f"\n🏆 CSP 特征表现最佳！")
     else:
@@ -175,7 +189,8 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
         "clf_csp": clf_csp,
         "clf_wavelet": clf_wavelet,
         "clf_fused": clf_fused,
-        "clf_fbcsp": clf_fbcsp,  # 【新增】
+        "clf_fused_motor": clf_fused_motor,  # 【新增】
+        "clf_fbcsp": clf_fbcsp,
         "metrics": {
             "csp": {
                 "accuracy": acc_csp,
@@ -195,7 +210,13 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
                 "cv_mean": acc_fused,
                 "cv_std": cv_scores_fused.std(),
             },
-            "fbcsp": {  # 【新增】
+            "fused_motor": {  # 【新增】
+                "accuracy": acc_fused_motor,
+                "cv_scores": cv_scores_fused_motor,
+                "cv_mean": acc_fused_motor,
+                "cv_std": cv_scores_fused_motor.std(),
+            },
+            "fbcsp": {
                 "accuracy": acc_fbcsp,
                 "cv_scores": cv_scores_fbcsp,
                 "cv_mean": acc_fbcsp,
