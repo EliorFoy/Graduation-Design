@@ -190,16 +190,17 @@ def make_feature_union(
     if feature_set in {"csp", "fused"}:
         transformers.append(("csp", MNECSPTransformer(n_components=n_csp_components)))
     if feature_set in {"wavelet", "fused"}:
+        # 【优化】直接通过 picks 参数选择通道，避免 FunctionTransformer 嵌套问题
         if motor_channels_only:
-            # 【优化】使用运动区通道的小波特征
-            from sklearn.pipeline import Pipeline as SklearnPipeline
-            motor_pipe = SklearnPipeline([
-                ('select_motor', FunctionTransformer(select_motor_channels, validate=False)),
-                ('wavelet', WaveletEnergyTransformer(wavelet=wavelet, level=wavelet_level))
-            ])
-            transformers.append(("wavelet", motor_pipe))
+            # BCIC IV-2a 数据集中 C3=6, Cz=8, C4=10
+            picks = [6, 8, 10]
         else:
-            transformers.append(("wavelet", WaveletEnergyTransformer(wavelet=wavelet, level=wavelet_level)))
+            picks = None
+        
+        transformers.append((
+            "wavelet", 
+            WaveletEnergyTransformer(wavelet=wavelet, level=wavelet_level, picks=picks)
+        ))
     if not transformers:
         raise ValueError("feature_set must be one of: 'csp', 'wavelet', 'fused'")
     return FeatureUnion(transformers)

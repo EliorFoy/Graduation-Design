@@ -145,10 +145,28 @@ def train_eeg_svm_pipeline(
             motor_channels_only=motor_channels_only,  # 【传递参数】
         )
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
-    cv_scores = cross_val_score(pipeline, X, y, cv=cv, scoring='accuracy')
+    
+    # 【调试】检查数据形状
+    print(f"   - 交叉验证前的 X 形状: {X.shape}")
+    print(f"   - y 形状: {y.shape}")
+    print(f"   - motor_channels_only: {motor_channels_only}")
+    
+    try:
+        cv_scores = cross_val_score(pipeline, X, y, cv=cv, scoring='accuracy')
+    except Exception as e:
+        print(f"\n❌ 交叉验证失败: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, np.array([np.nan]), np.nan
     
     # 【关键修复】在全部数据上拟合 Pipeline（包含特征提取、标准化、分类）
-    pipeline.fit(X, y)
+    try:
+        pipeline.fit(X, y)
+    except Exception as e:
+        print(f"\n❌ Pipeline 拟合失败: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, np.array([np.nan]), np.nan
 
     mean_accuracy = cv_scores.mean()
     print("\n✅ EEG SVM Pipeline 训练完成")

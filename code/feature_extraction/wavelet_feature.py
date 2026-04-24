@@ -48,15 +48,29 @@ def _wavelet_energy_from_array(data, wavelet='db4', level=4):
 class WaveletEnergyTransformer(BaseEstimator, TransformerMixin):
     """sklearn-compatible wavelet energy feature extractor."""
 
-    def __init__(self, wavelet='db4', level=4):
+    def __init__(self, wavelet='db4', level=4, picks=None):
+        """
+        Args:
+            wavelet: 小波基类型
+            level: 分解层数
+            picks: 通道索引列表，如 [6, 8, 10] 表示 C3, Cz, C4。None 表示使用全部通道
+        """
         self.wavelet = wavelet
         self.level = level
+        self.picks = picks
 
     def fit(self, X, y=None):
         return self
 
     def transform(self, X):
-        return _wavelet_energy_from_array(np.asarray(X), self.wavelet, self.level)
+        """Extract wavelet energy features from (trials, channels, times) data."""
+        data = np.asarray(X)
+        
+        # 【新增】如果指定了通道选择，先筛选通道
+        if self.picks is not None:
+            data = data[:, self.picks, :]
+        
+        return _wavelet_energy_from_array(data, self.wavelet, self.level)
 
 
 def extract_wavelet_energy_features(epochs, wavelet='db4', level=4):
