@@ -36,10 +36,6 @@ def compare_classifiers(X, y, feature_name="未知特征", cv_folds=10, random_s
     print(f"类别分布: {dict(zip(*np.unique(y, return_counts=True)))}")
     print("=" * 70)
     
-    # 标准化数据
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    
     # 交叉验证配置
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
     
@@ -102,8 +98,8 @@ def compare_classifiers(X, y, feature_name="未知特征", cv_folds=10, random_s
         # 添加 CNN
         classifiers['CNN'] = {
             'model': 'deep_learning',
-            'create_fn': lambda: _create_cnn_model(X_scaled.shape[1], len(np.unique(y))),
-            'train_fn': lambda model: _train_deep_model(model, X_scaled, y, 'CNN', random_state),
+            'create_fn': lambda: _create_cnn_model(X.shape[1], len(np.unique(y))),
+            'train_fn': lambda model: _train_deep_model(model, X, y, 'CNN', random_state),
             'description': '卷积神经网络'
         }
         
@@ -136,7 +132,7 @@ def compare_classifiers(X, y, feature_name="未知特征", cv_folds=10, random_s
             else:
                 # 传统机器学习模型
                 model = config['model']
-                scores = cross_val_score(model, X_scaled, y, cv=cv, scoring='accuracy', n_jobs=-1)
+                scores = cross_val_score(model, X, y, cv=cv, scoring='accuracy', n_jobs=-1)
                 accuracy = scores.mean()
                 std = scores.std()
                 elapsed = time.time() - start_time
@@ -264,7 +260,11 @@ def _train_deep_model(model, X, y, model_name, random_state=42, epochs=50, batch
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"   使用设备: {device}")
-    
+
+    # 标准化数据（深度学习模型需要手动标准化）
+    from sklearn.preprocessing import StandardScaler
+    X = StandardScaler().fit_transform(X)
+
     # 转换为 Tensor
     X_tensor = torch.FloatTensor(X).to(device)
     y_tensor = torch.LongTensor(y).to(device)
