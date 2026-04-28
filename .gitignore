@@ -31,3 +31,12 @@ env/
 
 # uv 锁文件
 uv.lock
+
+# 论文相关文件
+paper/
+
+# 临时文件
+temp/
+
+# claude
+CLAUDE.MD

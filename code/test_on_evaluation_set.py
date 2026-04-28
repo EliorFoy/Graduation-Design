@@ -31,7 +31,7 @@ import mne
 # 添加项目路径
 
 from classification.svm_classifier import train_eeg_svm_pipeline, plot_confusion_matrix
-from code.config import DEFAULT_CONFIG, TASK_CLASS_IDS, TASK_CLASS_NAMES, TASK_EVENT_IDS, ensure_result_dirs, events_to_class_labels
+from code.config import DEFAULT_CONFIG, TASK_CLASS_IDS, TASK_CLASS_NAMES, TASK_EVENT_ANNOTATIONS, ensure_result_dirs, epochs_events_to_class_labels
 from pretreatment.complete_preprocessing import (
     complete_preprocessing_pipeline,
     filter_for_ica,
@@ -152,10 +152,12 @@ def create_epochs_for_evaluation(raw_final, tmin=0, tmax=4, baseline=None, trial
     print(f"   - Epochs 数：{len(epochs)}")
     print(f"   - 通道数：{len(epochs.ch_names)} (仅 EEG)")
 
-    epochs.metadata = {
+    # 【关键修复】metadata 必须是 DataFrame，不能是 dict
+    import pandas as pd
+    epochs.metadata = pd.DataFrame({
         "trial_index": epochs.selection.astype(int),
         "event_sample": events_trial[epochs.selection, 0].astype(int),
-    }
+    })
 
     return epochs
 
@@ -247,7 +249,14 @@ def align_labels_with_epochs(epochs, true_labels):
         aligned_labels: 与 epochs 长度一致的标签数组
     """
     if epochs.metadata is not None and "trial_index" in epochs.metadata:
-        kept_indices = epochs.metadata["trial_index"].to_numpy(dtype=int)
+        # 兼容不同版本的 MNE：metadata 可能是 DataFrame 或 dict
+        import pandas as pd
+        if isinstance(epochs.metadata, pd.DataFrame):
+            kept_indices = epochs.metadata["trial_index"].to_numpy(dtype=int)
+        else:
+            # 如果是字典，尝试转换为 DataFrame
+            metadata_df = pd.DataFrame(epochs.metadata)
+            kept_indices = metadata_df["trial_index"].to_numpy(dtype=int)
     else:
         kept_indices = epochs.selection.astype(int)
     n_epochs = len(epochs)
@@ -298,12 +307,12 @@ def train_and_evaluate(train_subject="A01T", eval_subject="A01E", data_root=None
     )
 
     y_train_events = epochs_train.events[:, 2]
-    valid_mask = np.isin(y_train_events, TASK_EVENT_IDS)
+    valid_mask = np.isin(y_train_events, [7, 8, 9, 10])  # BCIC IV-2a 任务事件 ID
     if not np.all(valid_mask):
         print(f"Warning: dropped {np.sum(~valid_mask)} non-task training epochs")
         epochs_train = epochs_train[valid_mask]
-        y_train_events = y_train_events[valid_mask]
-    y_train = events_to_class_labels(y_train_events)
+    
+    y_train = epochs_events_to_class_labels(epochs_train)
 
     print("\nTraining set ready")
     print(f"   - epochs: {len(epochs_train)}")

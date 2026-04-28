@@ -190,7 +190,9 @@ def _create_random_forest_classifier(random_state=42):
     from sklearn.ensemble import RandomForestClassifier
     return RandomForestClassifier(
         n_estimators=100, 
-        max_depth=10,
+        max_depth=None,  # 不限制深度，让小样本数据充分学习
+        min_samples_split=5,  # 增加最小分裂样本数，避免过拟合
+        min_samples_leaf=2,   # 增加叶节点最小样本数
         random_state=random_state,
         n_jobs=-1
     )
@@ -202,8 +204,7 @@ def _create_logistic_regression_classifier(random_state=42):
     return LogisticRegression(
         C=1.0, 
         max_iter=1000,
-        random_state=random_state,
-        multi_class='multinomial'
+        random_state=random_state
     )
 
 
@@ -232,10 +233,14 @@ def _create_cnn_model(input_dim, num_classes):
             self.conv1 = nn.Conv1d(1, 32, kernel_size=3, padding=1)
             self.conv2 = nn.Conv1d(32, 64, kernel_size=3, padding=1)
             self.pool = nn.MaxPool1d(2)
-            self.fc1 = nn.Linear(64 * (input_dim // 4), 128)
-            self.fc2 = nn.Linear(128, num_classes)
             self.relu = nn.ReLU()
             self.dropout = nn.Dropout(0.5)
+            
+            # 动态计算全连接层输入维度
+            # 经过两次池化后，维度变为 input_dim // 4
+            flattened_dim = max(1, input_dim // 4)
+            self.fc1 = nn.Linear(64 * flattened_dim, 128)
+            self.fc2 = nn.Linear(128, num_classes)
         
         def forward(self, x):
             # x shape: (batch, features) -> (batch, 1, features)
