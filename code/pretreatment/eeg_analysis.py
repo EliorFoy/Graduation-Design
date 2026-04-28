@@ -3,29 +3,28 @@ from matplotlib import pyplot as plt
 import numpy as np
 from pathlib import Path
 import platform
+try:
+    from code.config import DEFAULT_CONFIG, resolve_data_path
+except ModuleNotFoundError:
+    import sys
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    from code.config import DEFAULT_CONFIG, resolve_data_path
 
-# 设置中文字体（兼容 Linux/Windows/macOS）
-system_name = platform.system()
-
-if system_name == 'Windows':
-    plt.rcParams['font.sans-serif'] = ['SimHei']
-elif system_name == 'Darwin':  # macOS
-    plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'Heiti TC']
-else:  # Linux
-    # 尝试使用 Linux 常见的中文字体
-    plt.rcParams['font.sans-serif'] = [
-        'WenQuanYi Zen Hei',      # 文泉驿正黑
-        'WenQuanYi Micro Hei',    # 文泉驿微米黑
-        'Noto Sans CJK SC',       # Google Noto 字体
-        'Droid Sans Fallback',
-        'DejaVu Sans'             # fallback：英文字体
-    ]
-
-plt.rcParams['axes.unicode_minus'] = False
-
+# 设置中文字体
+try:
+    import code._plot_config  # noqa: F401
+except ImportError:
+    import platform
+    system_name = platform.system()
+    if system_name == 'Windows':
+        plt.rcParams['font.sans-serif'] = ['SimHei']
+    plt.rcParams['axes.unicode_minus'] = False
 
 
-def get_raw_data(subject='A01T') -> mne.io.Raw:
+
+def get_raw_data(subject='A01T', data_root=None) -> mne.io.Raw:
     """
     加载指定被试的原始数据
     
@@ -35,10 +34,8 @@ def get_raw_data(subject='A01T') -> mne.io.Raw:
     Returns:
         raw: MNE Raw 对象
     """
-    # 获取项目根目录
-    project_root = Path(__file__).parent.parent.parent
     print("加载数据集")
-    data_path = project_root / "BCICIV_2a_gdf" / f"{subject}.gdf"
+    data_path = resolve_data_path(subject, data_root=data_root, config=DEFAULT_CONFIG)
     print(f"数据文件路径：{data_path}")
     
     # 检查文件是否存在
@@ -110,7 +107,7 @@ def set_electrode_and_show(raw):
     plt.show()
     return raw
 
-def get_modified_raw_data(subject='A01T') -> mne.io.Raw:
+def get_modified_raw_data(subject='A01T', data_root=None, raw=None) -> mne.io.Raw:
     """
     加载并处理指定被试的原始数据
     
@@ -120,7 +117,10 @@ def get_modified_raw_data(subject='A01T') -> mne.io.Raw:
     Returns:
         modified_raw: 处理后的 MNE Raw 对象
     """
-    raw = get_raw_data(subject)
+    if raw is None:
+        raw = get_raw_data(subject, data_root=data_root)
+    else:
+        raw = raw.copy()
     modified_raw = modify_channel_name_and_type(raw)
     
     # 【关键修复】设置标准 10-20 电极位置

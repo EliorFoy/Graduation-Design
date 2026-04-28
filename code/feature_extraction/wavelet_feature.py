@@ -7,28 +7,60 @@
 
 import numpy as np
 import pywt
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
-import platform
 
-# 设置中文字体（兼容 Linux/Windows/macOS）
-system_name = platform.system()
+# 设置中文字体
+try:
+    import code._plot_config  # noqa: F401
+except ImportError:
+    import platform
+    system_name = platform.system()
+    if system_name == 'Windows':
+        plt.rcParams['font.sans-serif'] = ['SimHei']
+    plt.rcParams['axes.unicode_minus'] = False
 
-if system_name == 'Windows':
-    plt.rcParams['font.sans-serif'] = ['SimHei']
-elif system_name == 'Darwin':  # macOS
-    plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'Heiti TC']
-else:  # Linux
-    # 尝试使用 Linux 常见的中文字体
-    plt.rcParams['font.sans-serif'] = [
-        'WenQuanYi Zen Hei',      # 文泉驿正黑
-        'WenQuanYi Micro Hei',    # 文泉驿微米黑
-        'Noto Sans CJK SC',       # Google Noto 字体
-        'Droid Sans Fallback',
-        'DejaVu Sans'             # fallback：英文字体
-    ]
 
-plt.rcParams['axes.unicode_minus'] = False
+def _wavelet_energy_from_array(data, wavelet='db4', level=4):
+    """Extract wavelet energy features from (trials, channels, times) data."""
+
+    features_list = []
+    for trial_data in data:
+        trial_features = []
+        for channel_signal in trial_data:
+            coeffs = pywt.wavedec(channel_signal, wavelet, level=level)
+            trial_features.extend(float(np.sum(coeff ** 2)) for coeff in coeffs)
+        features_list.append(trial_features)
+    return np.asarray(features_list)
+
+
+class WaveletEnergyTransformer(BaseEstimator, TransformerMixin):
+    """sklearn-compatible wavelet energy feature extractor."""
+
+    def __init__(self, wavelet='db4', level=4, picks=None):
+        """
+        Args:
+            wavelet: 小波基类型
+            level: 分解层数
+            picks: 通道索引列表，如 [6, 8, 10] 表示 C3, Cz, C4。None 表示使用全部通道
+        """
+        self.wavelet = wavelet
+        self.level = level
+        self.picks = picks
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        """Extract wavelet energy features from (trials, channels, times) data."""
+        data = np.asarray(X)
+        
+        # 【新增】如果指定了通道选择，先筛选通道
+        if self.picks is not None:
+            data = data[:, self.picks, :]
+        
+        return _wavelet_energy_from_array(data, self.wavelet, self.level)
 
 
 def extract_wavelet_energy_features(epochs, wavelet='db4', level=4):
@@ -63,27 +95,7 @@ def extract_wavelet_energy_features(epochs, wavelet='db4', level=4):
     for i, (band_name, (fmin, fmax)) in enumerate(freq_bands.items()):
         print(f"   - Level {i+1} ({band_name}): {fmin:.1f}-{fmax:.1f} Hz")
     
-    features_list = []
-    
-    for trial_idx in range(n_trials):
-        trial_features = []
-        
-        for ch_idx in range(n_channels):
-            signal = data[trial_idx, ch_idx, :]
-            
-            # 进行多层小波分解
-            coeffs = pywt.wavedec(signal, wavelet, level=level)
-            # coeffs = [cA_level, cD_level, cD_level-1, ..., cD_1]
-            # 例如 level=4: [cA4, cD4, cD3, cD2, cD1]
-            
-            # 计算每层的能量
-            for coeff in coeffs:
-                energy = np.sum(coeff ** 2)
-                trial_features.append(energy)
-        
-        features_list.append(trial_features)
-    
-    X_wavelet = np.array(features_list)
+    X_wavelet = _wavelet_energy_from_array(data, wavelet=wavelet, level=level)
     
     print("\n✅ 小波能量特征提取完成")
     print(f"   - 特征形状：{X_wavelet.shape}")
@@ -95,6 +107,8 @@ def extract_wavelet_energy_features(epochs, wavelet='db4', level=4):
 def extract_band_power_features(epochs, bands=None, wavelet='cmor1.5-1.0'):
     """
     提取标准频段的功率特征（使用连续小波变换）
+    
+    ⚠️  注意：此函数计算效率极低，仅用于演示。推荐使用 extract_wavelet_energy_features()。
     
     Args:
         epochs: Epochs 数据
@@ -139,9 +153,11 @@ def extract_band_power_features(epochs, bands=None, wavelet='cmor1.5-1.0'):
                 power = 0
                 
                 for freq in freqs:
-                    # 连续小波变换
-                    scales = pywt.frequency2scale(wavelet, freq / sfreq)
-                    coeffs = pywt.cwt(signal, scales, wavelet)[0]
+                    # 【关键修复】连续小波变换频率标度计算
+                    # pywt.frequency2scale 的第二个参数应为归一化频率 f/f_nyquist
+                    nyquist = sfreq / 2.0
+                    scale = pywt.frequency2scale(wavelet, freq / nyquist)
+                    coeffs = pywt.cwt(signal, [scale], wavelet)[0]
                     power += np.mean(np.abs(coeffs) ** 2)
                 
                 trial_features.append(power / len(freqs))
@@ -200,6 +216,7 @@ def compute_wavelet_freq_bands(sfreq, level):
     
     Returns:
         freq_bands: 有序字典，包含各层名称和频率范围
+                    顺序：A (最低频) → D1 (最高频)
     """
     # Nyquist 频率
     nyquist = sfreq / 2.0
@@ -212,16 +229,17 @@ def compute_wavelet_freq_bands(sfreq, level):
     for i in range(1, level + 1):
         f_low = f_high / 2.0
         
-        if i == 1:
+        # 【优化】基于实际频率动态命名，而非硬编码特定采样率的映射
+        if f_low >= 30:
             name = 'gamma'
-        elif i == 2:
-            name = 'beta_high'
-        elif i == 3:
-            name = 'beta_low+mu'
-        elif i == 4:
+        elif f_low >= 13:
+            name = 'beta'
+        elif f_low >= 8:
             name = 'mu+alpha'
+        elif f_low >= 4:
+            name = 'theta'
         else:
-            name = f'level{i}'
+            name = 'delta'
         
         freq_bands[f'D{i}'] = (f_low, f_high)
         f_high = f_low
@@ -248,6 +266,10 @@ def plot_wavelet_decomposition(signal, sfreq, wavelet='db4', level=4, save_path=
     """
     print("\n绘制小波分解图...")
     
+    # 确保输出目录存在
+    output_dir = Path(save_path).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
     # 小波分解 (coeffs = [cA_n, cD_n, cD_n-1, ..., cD_1])
     coeffs = pywt.wavedec(signal, wavelet, level=level)
     freq_bands = compute_wavelet_freq_bands(sfreq, level)
@@ -267,7 +289,9 @@ def plot_wavelet_decomposition(signal, sfreq, wavelet='db4', level=4, save_path=
     axes[0].set_ylabel('Amplitude')
     
     # 2. 绘制近似系数 (cA_n) - 最低频
-    cA_rec = pywt.upcoef('a', coeffs[0], wavelet, level=level, take=len(signal))
+    # 【修复】使用 waverec 替代已移除的 upcoef
+    coeffs_A = [coeffs[0]] + [np.zeros_like(cD) for cD in coeffs[1:]]
+    cA_rec = pywt.waverec(coeffs_A, wavelet)[:len(signal)]
     fmin, fmax = freq_bands['A']
     axes[1].plot(times, cA_rec, 'r-', linewidth=0.8)
     axes[1].set_title(f'Approximation A{level} ({fmin:.1f}-{fmax:.1f} Hz)', fontsize=10)
@@ -277,7 +301,14 @@ def plot_wavelet_decomposition(signal, sfreq, wavelet='db4', level=4, save_path=
     # coeffs[1] 对应 cD_level, coeffs[2] 对应 cD_level-1 ... coeffs[-1] 对应 cD_1
     for i in range(1, level + 1):
         current_level = level - i + 1
-        cD_rec = pywt.upcoef('d', coeffs[i], wavelet, level=current_level, take=len(signal))
+        # 【修复】重建单级细节系数
+        coeffs_D = [np.zeros_like(coeffs[0])]  # cA 置零
+        for j in range(1, len(coeffs)):
+            if j == i:
+                coeffs_D.append(coeffs[j])  # 保留当前层的细节系数
+            else:
+                coeffs_D.append(np.zeros_like(coeffs[j]))  # 其他层置零
+        cD_rec = pywt.waverec(coeffs_D, wavelet)[:len(signal)]
         
         ax_idx = i + 1
         fmin, fmax = freq_bands[f'D{current_level}']

@@ -5,24 +5,21 @@
 包括：预处理 → 特征提取 → 分类 → 评估
 """
 
-from classification.svm_classifier import (
-    train_svm_classifier,
-    evaluate_model,
-    plot_confusion_matrix,
-)
-from feature_extraction.wavelet_feature import (
-    extract_wavelet_energy_features,
-    normalize_features,
-)
-from feature_extraction.csp_feature import extract_csp_features, visualize_csp_topo
-from pretreatment.complete_preprocessing import complete_preprocessing_pipeline
-import numpy as np
-import mne
 from pathlib import Path
 import sys
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CODE_DIR = Path(__file__).resolve().parent
+for path in (PROJECT_ROOT, CODE_DIR):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+from classification.svm_classifier import train_eeg_svm_pipeline, plot_confusion_matrix
+from pretreatment.complete_preprocessing import complete_preprocessing_pipeline
+from code.config import DEFAULT_CONFIG, TASK_CLASS_IDS, TASK_CLASS_NAMES, TASK_EVENT_ANNOTATIONS, ensure_result_dirs, epochs_events_to_class_labels, resolve_data_path
+import numpy as np
+
 # 添加项目路径
-sys.path.append(str(Path(__file__).parent))
 
 
 def single_subject_pipeline(subject_id="A01T", data_root=None):
@@ -37,9 +34,6 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
           results: 包含所有结果的字典
                   {
                       'epochs': 预处理后的 Epochs,
-                      'X_csp': CSP 特征，
-                      'X_wavelet': 小波特征，
-                      'X_fused': 融合特征，
                       'y': 标签，
                       'clf_csp': CSP 分类器，
                       'clf_wavelet': 小波分类器，
@@ -54,12 +48,7 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
     # ========== Step 1: 数据准备 ==========
     print("\n【Step 1】数据准备")
 
-    if data_root is None:
-        # 自动查找数据路径
-        project_root = Path(__file__).parent.parent
-        data_path = project_root / "BCICIV_2a_gdf" / f"{subject_id}.gdf"
-    else:
-        data_path = Path(data_root) / f"{subject_id}.gdf"
+    data_path = resolve_data_path(subject_id, data_root=data_root, config=DEFAULT_CONFIG)
 
     print(f"   - 数据文件：{data_path}")
 
@@ -70,119 +59,122 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
     # ========== Step 2: 预处理 ==========
     print("\n【Step 2】EEG 预处理")
 
-    epochs, ica = complete_preprocessing_pipeline(subject=subject_id)
+    epochs, ica = complete_preprocessing_pipeline(subject=subject_id, data_root=data_root)
 
     print(f"✅ 预处理完成")
     print(f"   - Epochs 形状：{epochs.get_data().shape}")
     print(f"   - 试次数：{len(epochs)}")
     print(f"   - 通道数：{len(epochs.ch_names)}")
 
-    # ========== Step 3: 特征提取 ==========
-    print("\n【Step 3】特征提取")
+    # ========== Step 3: 获取标签 ==========
+    print("\n【Step 3】准备标签")
 
-    # 3.1 CSP 特征
-    X_csp, csp = extract_csp_features(epochs, n_components=4)
-
-    # 可视化 CSP 拓扑图
-    try:
-        visualize_csp_topo(
-            csp, epochs, save_path=f"./{subject_id}_csp_topo.png")
-    except Exception as e:
-        print(f"⚠️  无法绘制 CSP 拓扑图：{e}")
-
-    # 3.2 小波特征
-    X_wavelet = extract_wavelet_energy_features(epochs, wavelet="db4", level=4)
-
-    # 3.3 特征归一化
-    X_csp_norm, scaler_csp = normalize_features(X_csp)
-    X_wavelet_norm, scaler_wavelet = normalize_features(X_wavelet)
-
-    # ========== Step 4: 特征融合 ==========
-    print("\n【Step 4】特征融合")
-
-    # 简单拼接融合
-    X_fused = np.hstack([X_csp_norm, X_wavelet_norm])
-    print(f"   - CSP 特征：{X_csp_norm.shape}")
-    print(f"   - 小波特征：{X_wavelet_norm.shape}")
-    print(f"   - 融合特征：{X_fused.shape}")
-
-    # ========== Step 5: 获取标签 ==========
-    print("\n【Step 5】准备标签")
-
-    # 从 epochs.events 中提取标签
-    y = epochs.events[:, 2]
+    # 使用动态映射：通过 epochs.event_id 将 MNE 内部事件 ID 转换为类别标签 (1-4)
+    y = epochs_events_to_class_labels(epochs)
     
     # 显示标签分布
-    unique_labels, counts = np.unique(y, return_counts=True)
-    print(f"\n📊 标签分布:")
-    for label, count in zip(unique_labels, counts):
-        label_name = {769: '左手', 770: '右手', 771: '双脚', 772: '舌头'}.get(label, '未知')
-        print(f"   - {label} ({label_name}): {count} 个")
+    unique_classes, class_counts = np.unique(y, return_counts=True)
+    print(f"\n📊 类别标签分布:")
+    for cls, cnt in zip(unique_classes, class_counts):
+        cls_name = TASK_CLASS_NAMES[cls - 1] if cls <= len(TASK_CLASS_NAMES) else '未知'
+        print(f"   - 类别 {cls} ({cls_name}): {cnt} 个")
     
-    # 检查是否有非任务标签
-    valid_labels = [769, 770, 771, 772]
-    invalid_mask = ~np.isin(y, valid_labels)
-    if np.any(invalid_mask):
-        n_invalid = np.sum(invalid_mask)
-        invalid_labels = np.unique(y[invalid_mask])
-        print(f"\n⚠️  警告：发现 {n_invalid} 个非任务标签：{invalid_labels}")
-        print(f"   这些标签将在训练时被排除...")
-    
-    print(f"\n✅ 标签形状：{y.shape}")
+    print(f"\n✅ 最终标签形状：{y.shape}")
 
-    # ========== Step 6: 分类器训练与评估 ==========
-    print("\n【Step 6】SVM 分类器训练与评估")
+    # ========== Step 4: 分类器训练与评估 ==========
+    print("\n【Step 4】SVM 分类器训练与评估")
 
     # 6.1 仅使用 CSP 特征
     print("\n--- 使用 CSP 特征 ---")
-    clf_csp, cv_scores_csp, acc_csp = train_svm_classifier(X_csp_norm, y)
+    clf_csp, cv_scores_csp, acc_csp = train_eeg_svm_pipeline(
+        epochs, y, feature_set="csp", cv_folds=DEFAULT_CONFIG.cv_folds,
+        n_csp_components=DEFAULT_CONFIG.csp_components,
+        kernel=DEFAULT_CONFIG.svm_kernel,
+        random_state=DEFAULT_CONFIG.random_state,
+    )
 
     # 6.2 仅使用小波特征
     print("\n--- 使用小波特征 ---")
-    clf_wavelet, cv_scores_wavelet, acc_wavelet = train_svm_classifier(
-        X_wavelet_norm, y
+    clf_wavelet, cv_scores_wavelet, acc_wavelet = train_eeg_svm_pipeline(
+        epochs, y, feature_set="wavelet", cv_folds=DEFAULT_CONFIG.cv_folds,
+        wavelet=DEFAULT_CONFIG.wavelet, wavelet_level=DEFAULT_CONFIG.wavelet_level,
+        kernel=DEFAULT_CONFIG.svm_kernel,
+        random_state=DEFAULT_CONFIG.random_state,
     )
 
     # 6.3 使用融合特征
-    print("\n--- 使用融合特征 ---")
-    clf_fused, cv_scores_fused, acc_fused = train_svm_classifier(X_fused, y)
+    print("\n--- 使用融合特征（全通道） ---")
+    clf_fused, cv_scores_fused, acc_fused = train_eeg_svm_pipeline(
+        epochs, y, feature_set="fused", cv_folds=DEFAULT_CONFIG.cv_folds,
+        n_csp_components=DEFAULT_CONFIG.csp_components,
+        wavelet=DEFAULT_CONFIG.wavelet, wavelet_level=DEFAULT_CONFIG.wavelet_level,
+        motor_channels_only=False,
+        kernel=DEFAULT_CONFIG.svm_kernel,
+        random_state=DEFAULT_CONFIG.random_state,
+    )
+    
+    # 6.3b 使用融合特征（仅运动区通道）
+    print("\n--- 使用融合特征（运动区通道 C3/Cz/C4） ---")
+    clf_fused_motor, cv_scores_fused_motor, acc_fused_motor = train_eeg_svm_pipeline(
+        epochs, y, feature_set="fused", cv_folds=DEFAULT_CONFIG.cv_folds,
+        n_csp_components=DEFAULT_CONFIG.csp_components,
+        wavelet=DEFAULT_CONFIG.wavelet, wavelet_level=DEFAULT_CONFIG.wavelet_level,
+        motor_channels_only=True,
+        kernel=DEFAULT_CONFIG.svm_kernel,
+        random_state=DEFAULT_CONFIG.random_state,
+    )
 
-    # ========== Step 7: 结果汇总 ==========
-    print("\n【Step 7】结果汇总")
+    # 6.4 使用 FBCSP 特征（滤波器组 CSP）
+    print("\n--- 使用 FBCSP 特征（滤波器组 CSP） ---")
+    clf_fbcsp, cv_scores_fbcsp, acc_fbcsp = train_eeg_svm_pipeline(
+        epochs, y, 
+        feature_set='fb_csp',
+        cv_folds=DEFAULT_CONFIG.cv_folds,
+        n_csp_components=DEFAULT_CONFIG.csp_components,
+        freq_bands=[(8, 12), (12, 16), (16, 20), (20, 24), (24, 30)],
+        kernel=DEFAULT_CONFIG.svm_kernel,
+        random_state=DEFAULT_CONFIG.random_state,
+    )
+
+    # ========== Step 5: 结果汇总 ==========
+    print("\n【Step 5】结果汇总")
 
     print("\n" + "=" * 60)
     print("分类性能对比")
     print("=" * 60)
-    print(f"CSP 特征准确率：     {acc_csp:.4f} ± {cv_scores_csp.std():.4f}")
-    print(f"小波特征准确率：   {acc_wavelet:.4f} ± {cv_scores_wavelet.std():.4f}")
-    print(f"融合特征准确率：   {acc_fused:.4f} ± {cv_scores_fused.std():.4f}")
+    print(f"CSP 特征准确率：         {acc_csp:.4f} ± {cv_scores_csp.std():.4f}")
+    print(f"小波特征准确率：       {acc_wavelet:.4f} ± {cv_scores_wavelet.std():.4f}")
+    print(f"融合特征准确率（全通道）： {acc_fused:.4f} ± {cv_scores_fused.std():.4f}")
+    print(f"融合特征准确率（运动区）： {acc_fused_motor:.4f} ± {cv_scores_fused_motor.std():.4f}")
+    print(f"FBCSP 特征准确率：     {acc_fbcsp:.4f} ± {cv_scores_fbcsp.std():.4f}")
     print("=" * 60)
 
     # 找出最佳特征
-    best_acc = max(acc_csp, acc_wavelet, acc_fused)
-    if best_acc == acc_fused:
-        print(f"\n🏆 融合特征表现最佳！")
+    best_acc = max(acc_csp, acc_wavelet, acc_fused, acc_fused_motor, acc_fbcsp)
+    if best_acc == acc_fbcsp:
+        print(f"\n🏆 FBCSP 特征表现最佳！")
+    elif best_acc == acc_fused_motor:
+        print(f"\n🏆 融合特征（运动区）表现最佳！")
+    elif best_acc == acc_fused:
+        print(f"\n🏆 融合特征（全通道）表现最佳！")
     elif best_acc == acc_csp:
         print(f"\n🏆 CSP 特征表现最佳！")
     else:
         print(f"\n🏆 小波特征表现最佳！")
 
-    # ========== Step 8: 保存结果 ==========
-    print("\n【Step 8】保存结果")
+    # ========== Step 6: 保存结果 ==========
+    print("\n【Step 6】保存结果")
 
     results = {
         "subject_id": subject_id,
         "epochs": epochs,
         "ica": ica,
-        "X_csp": X_csp,
-        "X_wavelet": X_wavelet,
-        "X_fused": X_fused,
         "y": y,
-        "scaler_csp": scaler_csp,
-        "scaler_wavelet": scaler_wavelet,
         "clf_csp": clf_csp,
         "clf_wavelet": clf_wavelet,
         "clf_fused": clf_fused,
+        "clf_fused_motor": clf_fused_motor,  # 【新增】
+        "clf_fbcsp": clf_fbcsp,
         "metrics": {
             "csp": {
                 "accuracy": acc_csp,
@@ -202,31 +194,45 @@ def single_subject_pipeline(subject_id="A01T", data_root=None):
                 "cv_mean": acc_fused,
                 "cv_std": cv_scores_fused.std(),
             },
+            "fused_motor": {  # 【新增】
+                "accuracy": acc_fused_motor,
+                "cv_scores": cv_scores_fused_motor,
+                "cv_mean": acc_fused_motor,
+                "cv_std": cv_scores_fused_motor.std(),
+            },
+            "fbcsp": {
+                "accuracy": acc_fbcsp,
+                "cv_scores": cv_scores_fbcsp,
+                "cv_mean": acc_fbcsp,
+                "cv_std": cv_scores_fbcsp.std(),
+            },
         },
     }
 
     print(f"✅ 结果已保存到 results 字典")
 
-    # ========== Step 9: 可视化（可选） ==========
-    print("\n【Step 9】可视化（可选）")
+    # ========== Step 7: 可视化（可选） ==========
+    print("\n【Step 7】可视化（可选）")
 
     # 绘制混淆矩阵（使用融合特征）
     try:
         from sklearn.metrics import confusion_matrix
         
-        y_pred = clf_fused.predict(X_fused)
-        class_names = ["左手", "右手", "双脚", "舌头"]
+        y_pred = clf_fused.predict(epochs.get_data())
+        class_names = TASK_CLASS_NAMES
         
         # 计算混淆矩阵
-        cm = confusion_matrix(y, y_pred)
+        cm = confusion_matrix(y, y_pred, labels=TASK_CLASS_IDS)
         
         # 绘制混淆矩阵图
+        dirs = ensure_result_dirs(subject_id, config=DEFAULT_CONFIG)
+        cm_path = dirs["figures"] / f"{subject_id}_confusion_matrix.png"
         plot_confusion_matrix(
             cm,
             class_names=class_names,
-            save_path=f"./{subject_id}_confusion_matrix.png",
+            save_path=str(cm_path),
         )
-        print(f"✅ 混淆矩阵已保存：./{subject_id}_confusion_matrix.png")
+        print(f"✅ 混淆矩阵已保存：{cm_path}")
     except Exception as e:
         print(f"⚠️  无法绘制混淆矩阵：{e}")
 
@@ -283,12 +289,6 @@ if __name__ == "__main__":
             print(f"\n📊 被试：{results['subject_id']}")
             print(f"📈 最终试次数：{len(results['epochs'])}")
             print(f"🔌 通道数：{len(results['epochs'].ch_names)}")
-            
-            # 显示特征形状
-            print(f"\n特征维度:")
-            print(f"  - CSP 特征：{results['X_csp'].shape}")
-            print(f"  - 小波特征：{results['X_wavelet'].shape}")
-            print(f"  - 融合特征：{results['X_fused'].shape}")
             
             # 显示分类性能
             print(f"\n分类准确率:")

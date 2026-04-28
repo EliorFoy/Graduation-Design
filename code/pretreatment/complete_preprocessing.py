@@ -9,6 +9,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 from .eeg_analysis import get_modified_raw_data  # 导入之前的处理函数
+try:
+    from code.config import DEFAULT_CONFIG, EEGPipelineConfig
+except ModuleNotFoundError:
+    import sys
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    from code.config import DEFAULT_CONFIG, EEGPipelineConfig
 
 # 设置中文字体（兼容 Linux/Windows/macOS）
 import platform
@@ -67,7 +75,7 @@ def fit_ica(raw_ica, n_components=None, method='fastica', max_iter=800):
     Args:
         raw_ica: 用于 ICA 分解的数据（轻度滤波）
         n_components: 保留的独立成分数
-                     - None: 使用所有通道数（推荐，能更好分离伪迹）
+                     - None: 使用方差保留策略（推荐）
                      - int: 固定成分数
                      - float: 保留的方差比例（如 0.99）
         method: ICA 算法 ('fastica', 'picard', 'infomax')
@@ -78,12 +86,10 @@ def fit_ica(raw_ica, n_components=None, method='fastica', max_iter=800):
     """
     print("\n进行 ICA 分解...")
     
-    # 默认使用 EEG 通道数，确保能充分分离伪迹成分
+    # 默认使用方差保留策略，确保能充分分离伪迹成分
     if n_components is None:
-        # 只计算 EEG 通道（排除 EOG）
-        eeg_picks = mne.pick_types(raw_ica.info, eeg=True, exclude=[])
-        n_components = len(eeg_picks)
-        print(f"   - 使用 EEG 通道数作为成分数：{n_components}")
+        n_components = 0.99  # 保留 99% 方差的成分
+        print(f"   - 将使用方差保留策略 (n_components=0.99) 自动选择成分数")
     
     # 创建 ICA 对象
     ica = ICA(
@@ -104,7 +110,7 @@ def fit_ica(raw_ica, n_components=None, method='fastica', max_iter=800):
     return ica
 
 
-def detect_and_remove_artifacts(ica, raw_ica, eog_threshold=2.0, ecg_method='correlation'):
+def detect_and_remove_artifacts(ica, raw_ica, eog_threshold=2.0, ecg_method='correlation', eog_corr_threshold=0.3, save_path='./output_img/ica_eog_components.png'):
     """
     自动识别并去除伪迹成分
     
@@ -113,6 +119,8 @@ def detect_and_remove_artifacts(ica, raw_ica, eog_threshold=2.0, ecg_method='cor
         raw_ica: 用于检测的轻度滤波数据
         eog_threshold: EOG 检测阈值（标准差倍数，降低到 2.0 提高灵敏度）
         ecg_method: ECG 检测方法
+        eog_corr_threshold: EOG 手动相关性检测阈值（默认 0.3）
+        save_path: EOG 成分图保存路径
     
     Returns:
         ica: 更新了 exclude 的 ICA 对象
@@ -153,7 +161,7 @@ def detect_and_remove_artifacts(ica, raw_ica, eog_threshold=2.0, ecg_method='cor
             component_correlations[comp_idx] = max_corr_for_comp
             
             # 如果相关性超过阈值，标记为 EOG 成分
-            if max_corr_for_comp > 0.3:
+            if max_corr_for_comp > eog_corr_threshold:
                 eog_components.append((comp_idx, max_corr_for_comp))
         
         # 按相关性排序，取最相关的几个成分
@@ -161,8 +169,8 @@ def detect_and_remove_artifacts(ica, raw_ica, eog_threshold=2.0, ecg_method='cor
         
         # 取前几个强相关的成分（通常眨眼 + 水平眼动 = 1-3 个成分）
         if len(eog_components) > 0:
-            # 只取相关性>0.3 的成分
-            significant_components = [comp for comp, corr in eog_components if corr > 0.3]
+            # 只取相关性>eog_corr_threshold 的成分
+            significant_components = [comp for comp, corr in eog_components if corr > eog_corr_threshold]
             if len(significant_components) > 0:
                 eog_indices = significant_components
                 print(f"   - 手动检测到 {len(eog_indices)} 个 EOG 相关成分：{eog_indices}")
@@ -192,10 +200,14 @@ def detect_and_remove_artifacts(ica, raw_ica, eog_threshold=2.0, ecg_method='cor
     # 可视化检测到的 EOG 成分
     if len(eog_indices) > 0:
         try:
+            # 确保输出目录存在
+            output_dir = Path(save_path).parent
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
             ica.plot_components(picks=eog_indices, show=False)
             plt.suptitle('检测到的 EOG 成分')
-            plt.savefig('./output_img/ica_eog_components.png', dpi=300, bbox_inches='tight')
-            print("   📊 EOG 成分图已保存：./output_img/ica_eog_components.png")
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"   📊 EOG 成分图已保存：{save_path}")
         except RuntimeError as e:
             print(f"   ⚠️  无法绘制 ICA 成分图：{e}")
             print("   （这不影响 ICA 去噪效果，只是可视化问题）")
@@ -203,21 +215,21 @@ def detect_and_remove_artifacts(ica, raw_ica, eog_threshold=2.0, ecg_method='cor
     return ica
 
 
-def apply_ica(ica, raw_original):
+def apply_ica(ica, raw_filtered_for_ica):
     """
     应用 ICA 去噪
     
     Args:
         ica: 训练好的 ICA 对象
-        raw_original: 原始数据（用于应用 ICA）
+        raw_filtered_for_ica: 用于拟合 ICA 的滤波后数据（必须与拟合时相同）
     
     Returns:
         raw_clean: 去噪后的 Raw 对象
     """
     print("\n应用 ICA 去噪...")
     
-    # 在原始数据上应用 ICA（保留完整频段）
-    raw_clean = ica.apply(raw_original.copy())
+    # 【关键修复】在相同的滤波数据上应用 ICA，确保一致性
+    raw_clean = ica.apply(raw_filtered_for_ica.copy())
     
     print(f"✅ ICA 去噪完成")
     print(f"   - 剔除了 {len(ica.exclude)} 个伪迹成分")
@@ -305,25 +317,42 @@ def create_epochs_with_artifact_removal_mne(raw_final, tmin=0, tmax=4):
         print(f"   ⚠️  MNE 未读取到 1023 事件")
         artifact_events = np.array([])
     
-    # 3. 找到 trial start (768) 事件
+    # 3. 找到 trial start (768) 事件或 cue 事件
     event_768_id = event_dict.get('768', None)
     
+    # 获取所有 cue 事件 (769-772)
+    cue_ids = [event_dict.get(str(k), None) for k in [769, 770, 771, 772]]
+    cue_ids = [x for x in cue_ids if x is not None]
+    cue_mask_all = np.isin(events[:, 2], cue_ids)
+    cue_events = events[cue_mask_all]
+    cue_events = cue_events[np.argsort(cue_events[:, 0])]
+    
     if event_768_id is not None:
+        # 有 768 事件，使用 768 作为 trial 起始
         trial_start_mask = events[:, 2] == event_768_id
         trial_start_events = events[trial_start_mask]
         trial_start_events = trial_start_events[np.argsort(trial_start_events[:, 0])]
         print(f"   - 检测到 {len(trial_start_events)} 个 trial start (768)")
+        print(f"   - 检测到 {len(cue_events)} 个 cue 事件 (769-772)")
+        
+        # 验证数量一致性
+        if len(trial_start_events) != len(cue_events):
+            print(f"   ⚠️  警告：768 事件数 ({len(trial_start_events)}) 与 cue 事件数 ({len(cue_events)}) 不一致")
+            print(f"      将使用较短的数量进行对齐")
+            min_len = min(len(trial_start_events), len(cue_events))
+            trial_start_events = trial_start_events[:min_len]
+            cue_events = cue_events[:min_len]
     else:
-        print(f"   ⚠️  MNE 未读取到 768 事件，使用 cue onset 排序")
-        # 退而求其次：用 769-772 cue 事件
-        cue_ids = [event_dict.get(str(k), None) for k in [769, 770, 771, 772]]
-        cue_ids = [x for x in cue_ids if x is not None]
-        cue_mask = np.isin(events[:, 2], cue_ids)
-        trial_start_events = events[cue_mask]
-        trial_start_events = trial_start_events[np.argsort(trial_start_events[:, 0])]
+        # fallback：直接使用 cue 事件作为 trial 起始
+        print(f"   ⚠️  MNE 未读取到 768 事件，使用 cue 事件作为 trial 起始")
+        trial_start_events = cue_events.copy()
+        print(f"   - 使用 {len(trial_start_events)} 个 cue 事件")
     
     n_trials = len(trial_start_events)
     print(f"   📊 总 trial 数：{n_trials}")
+    
+    if n_trials == 0:
+        raise ValueError("没有有效的 trial 事件，无法创建 Epochs。请检查数据格式。")
     
     # 4. 标记哪些 trial 包含伪迹
     keep_mask = np.ones(n_trials, dtype=bool)
@@ -332,12 +361,25 @@ def create_epochs_with_artifact_removal_mne(raw_final, tmin=0, tmax=4):
     if len(artifact_events) > 0:
         for i, trial_event in enumerate(trial_start_events):
             trial_start_time = trial_event[0]
-            trial_end_time = trial_start_time + 6 * sfreq  # trial 持续 6 秒 (t=0 到 t=6)
+            
+            # 【关键修复】根据事件类型确定正确的伪迹检测窗口
+            event_id = trial_event[2]
+            
+            # 检查是否是 768 事件（trial start）
+            if event_768_id is not None and event_id == event_768_id:
+                # 768 是 trial 起始 (t=0)，trial 范围是 [0, 6] 秒
+                trial_window_start = trial_start_time
+                trial_window_end = trial_start_time + 6 * sfreq
+            else:
+                # cue 事件 (769-772)，cue 在 t=2s 出现，trial 范围是 [-2, 4] 相对于 cue
+                # 即 [cue-2s, cue+4s]
+                trial_window_start = trial_start_time - 2 * sfreq
+                trial_window_end = trial_start_time + 4 * sfreq
             
             # 检查是否有 1023 在这个 trial 窗口内
             for artifact_event in artifact_events:
                 artifact_time = artifact_event[0]
-                if trial_start_time <= artifact_time <= trial_end_time:
+                if trial_window_start <= artifact_time <= trial_window_end:
                     keep_mask[i] = False
                     print(f"      - Trial {i} 包含伪迹 (1023 时间：{artifact_time/sfreq:.1f}s)")
                     break
@@ -347,30 +389,24 @@ def create_epochs_with_artifact_removal_mne(raw_final, tmin=0, tmax=4):
     else:
         print(f"   ℹ️  无 1023 事件，保留所有 trial")
     
-    # 5. 保留干净 trial 对应的 cue 事件 (769-772)
-    clean_trial_events = trial_start_events[keep_mask]
+    # 5. 【关键修复】直接使用 keep_mask 过滤 cue 事件，避免事件匹配错位
+    clean_cue_events = cue_events[keep_mask]
+    final_events = clean_cue_events
     
-    # 找到每个干净 trial 对应的 cue onset
-    cue_ids = [event_dict.get(str(k), None) for k in [769, 770, 771, 772]]
-    cue_ids = [x for x in cue_ids if x is not None]
+    # 【关键检查】确保有有效事件
+    if len(final_events) == 0:
+        raise ValueError("没有有效的 trial 事件，无法创建 Epochs。请检查数据或伪迹剔除是否过于严格。")
     
-    final_events = []
-    for trial_event in clean_trial_events:
-        trial_time = trial_event[0]
-        # 找这个 trial 之后的 cue 事件（应该在 t=2s 左右，即 500 采样点后）
-        time_diffs = events[:, 0] - trial_time
-        cue_after_mask = (time_diffs > 0) & (time_diffs < 3000) & np.isin(events[:, 2], cue_ids)
-        cue_candidates = events[cue_after_mask]
-        if len(cue_candidates) > 0:
-            # 取最近的 cue
-            closest_cue = cue_candidates[np.argmin(cue_candidates[:, 0])]
-            final_events.append(closest_cue)
-    
-    final_events = np.array(final_events)
     print(f"   ✅ 最终有效 cue 事件：{len(final_events)}")
     
     # 6. 创建 epochs
     event_id_final = {k: event_dict[k] for k in ['769', '770', '771', '772'] if k in event_dict}
+    
+    # 【关键检查】确保 event_id_final 不为空
+    if not event_id_final:
+        raise ValueError(f"未找到任何任务事件 (769-772)。可用事件：{list(event_dict.keys())}")
+    
+    print(f"   📋 使用的事件 ID 映射：{event_id_final}")
     
     epochs = mne.Epochs(
         raw_final, 
@@ -384,142 +420,15 @@ def create_epochs_with_artifact_removal_mne(raw_final, tmin=0, tmax=4):
         event_repeated='drop'
     )
     
+    # 【关键修复】只保留 EEG 通道，剔除 EOG 通道，防止模型"偷看"眼动信息
+    epochs.pick_types(eeg=True, exclude=[])
+    
     print(f"✅ 分段完成：{len(epochs)} 个 epochs")
+    print(f"   - 通道类型：仅 EEG ({len(epochs.ch_names)} 个通道)")
     
     return epochs
 
 
-def create_epochs(raw_final, event_id=None, tmin=0, tmax=4, baseline=None):
-    """
-    分段
-    
-    Args:
-        raw_final: 最终处理后的数据
-        event_id: 事件 ID 字典
-        tmin: 起始时间（相对于事件）
-        tmax: 结束时间
-        baseline: 基线校正（None 表示不做）
-    
-    Returns:
-        epochs: 分段后的 Epochs 对象
-    """
-    print("\n创建分段...")
-    
-    # 默认事件 ID（BCIC IV-2a）
-    if event_id is None:
-        event_id = {
-            'left': 769,
-            'right': 770,
-            'feet': 771,
-            'tongue': 772
-        }
-    
-    # 从 annotations 中提取事件（BCIC IV-2a 数据集使用 annotations 存储事件）
-    events, event_dict = mne.events_from_annotations(raw_final)
-    
-    print(f"   - 从 annotations 中提取到 {len(events)} 个事件")
-    print(f"   - 事件类型：{list(event_dict.keys())}")
-    print(f"   - 事件 ID 映射：{event_dict}")
-    
-    # 🔧 关键修复：只保留 4 类任务标记 [769, 770, 771, 772]
-    # 注意：MNE 会自动映射 annotations 到整数，需要找到对应的映射值
-    # 原始值 '769', '770', '771', '772' 会被映射到 event_dict 中的值
-    
-    # 找到 4 类任务对应的映射值
-    task_keys = ['769', '770', '771', '772']
-    valid_event_ids = [event_dict[k] for k in task_keys if k in event_dict]
-    
-    print(f"\n   🎯 任务事件 ID: {valid_event_ids}")
-    
-    # 过滤只保留任务事件
-    valid_mask = np.isin(events[:, 2], valid_event_ids)
-    
-    # 检查并报告
-    unique_events, counts = np.unique(events[:, 2], return_counts=True)
-    print(f"\n   📊 原始事件分布:")
-    for event_id, count in zip(unique_events, counts):
-        # 反向查找事件名称
-        event_name = '未知'
-        for k, v in event_dict.items():
-            if v == event_id:
-                event_name = k
-                break
-        print(f"      - {event_id} ({event_name}): {count} 个")
-    
-    if not np.all(valid_mask):
-        n_invalid = np.sum(~valid_mask)
-        print(f"\n   ⚠️  将过滤 {n_invalid} 个非任务事件")
-    
-    # 过滤 events
-    events_filtered = events[valid_mask]
-    
-    print(f"\n   ✅ 过滤后事件数：{len(events_filtered)}")
-    
-    # 创建 Epochs（使用过滤后的 events 和我们定义的 event_id）
-    # 重新创建 event_id 映射，只包含任务类别
-    event_id_final = {k: event_dict[k] for k in task_keys if k in event_dict}
-    
-    print(f"   📋 使用的事件 ID 映射：{event_id_final}")
-    
-    epochs = mne.Epochs(
-        raw_final, 
-        events_filtered, 
-        event_id=event_id_final,  # 使用我们定义的映射
-        tmin=tmin, 
-        tmax=tmax,
-        baseline=baseline,
-        preload=True,
-        verbose=False,
-        event_repeated='drop'  # 处理重复事件
-    )
-    
-    print(f"\n✅ 分段完成")
-    print(f"   - Epochs 数：{len(epochs)}")
-    print(f"   - 时间窗口：[{tmin}, {tmax}] s")
-    
-    return epochs
-
-
-def drop_artifact_epochs(epochs, events, artifact_codes=[1023]):
-    """
-    剔除官方标记的伪迹试次
-    
-    Args:
-        epochs: 分段后的数据
-        events: 事件数组
-        artifact_codes: 伪迹事件代码列表，默认 [1023]
-    
-    Returns:
-        epochs: 剔除伪迹后的 Epochs 对象
-    """
-    print("\n剔除伪迹试次...")
-    
-    # 创建要保留的试次的 mask（True 表示保留）
-    keep_mask = np.ones(len(epochs), dtype=bool)
-    
-    total_artifacts = 0
-    for artifact_code in artifact_codes:
-        # 找到伪迹事件的位置
-        artifact_mask = events[:, 2] == artifact_code
-        n_artifacts = np.sum(artifact_mask)
-        
-        if n_artifacts > 0:
-            # 找到这些伪迹事件对应的 epochs 索引
-            artifact_indices = np.where(artifact_mask)[0]
-            # 标记为不保留
-            keep_mask[artifact_indices] = False
-            print(f"   - 剔除了 {n_artifacts} 个事件代码为 {artifact_code} 的试次")
-            total_artifacts += n_artifacts
-    
-    if total_artifacts > 0:
-        # 使用索引切片方式剔除试次（关键：这样会自动更新 events 数组）
-        epochs = epochs[keep_mask].copy()
-        print(f"✅ 总共剔除了 {total_artifacts} 个伪迹试次")
-        print(f"   - 剩余 Epochs 数：{len(epochs)}")
-    else:
-        print(f"ℹ️  未检测到伪迹试次标记")
-    
-    return epochs
 
 
 def plot_preprocessing_comparison(raw_original, raw_ica_filtered, raw_clean, raw_final, save_path='./output_img/preprocessing_comparison.png'):
@@ -535,76 +444,89 @@ def plot_preprocessing_comparison(raw_original, raw_ica_filtered, raw_clean, raw
     """
     print("\n可视化预处理效果...")
     
+    # 确保输出目录存在
+    output_dir = Path(save_path).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
     fig, axes = plt.subplots(4, 2, figsize=(14, 12))
     
-    # 1. 原始数据 PSD
-    psd_orig = raw_original.compute_psd(fmin=0, fmax=50)
+    # 1. 原始数据 PSD（仅 EEG 通道，避免 EOG 低频能量扭曲频谱）
+    psd_orig = raw_original.compute_psd(fmin=0, fmax=50, picks='eeg')
     psd_data_orig, freqs_orig = psd_orig.get_data(return_freqs=True)
     axes[0, 0].plot(freqs_orig, np.mean(psd_data_orig, axis=0), linewidth=1)
-    axes[0, 0].set_title('原始数据 PSD')
+    axes[0, 0].set_title('原始数据 PSD (EEG)')
     axes[0, 0].set_xlim(0, 50)
     axes[0, 0].set_xlabel('频率 (Hz)')
     axes[0, 0].set_ylabel('功率谱密度 (μV²/Hz)')
     axes[0, 0].grid(True, alpha=0.3)
     
     # 2. ICA 前滤波 PSD
-    psd_ica = raw_ica_filtered.compute_psd(fmin=0, fmax=50)
+    psd_ica = raw_ica_filtered.compute_psd(fmin=0, fmax=50, picks='eeg')
     psd_data_ica, freqs_ica = psd_ica.get_data(return_freqs=True)
     axes[1, 0].plot(freqs_ica, np.mean(psd_data_ica, axis=0), linewidth=1, color='orange')
-    axes[1, 0].set_title('ICA 前滤波 PSD (1-40Hz)')
+    axes[1, 0].set_title('ICA 前滤波 PSD (1-40Hz, EEG)')
     axes[1, 0].set_xlim(0, 50)
     axes[1, 0].set_xlabel('频率 (Hz)')
     axes[1, 0].set_ylabel('功率谱密度 (μV²/Hz)')
     axes[1, 0].grid(True, alpha=0.3)
     
     # 3. ICA 去噪后 PSD
-    psd_clean = raw_clean.compute_psd(fmin=0, fmax=50)
+    psd_clean = raw_clean.compute_psd(fmin=0, fmax=50, picks='eeg')
     psd_data_clean, freqs_clean = psd_clean.get_data(return_freqs=True)
     axes[2, 0].plot(freqs_clean, np.mean(psd_data_clean, axis=0), linewidth=1, color='green')
-    axes[2, 0].set_title('ICA 去噪后 PSD')
+    axes[2, 0].set_title('ICA 去噪后 PSD (EEG)')
     axes[2, 0].set_xlim(0, 50)
     axes[2, 0].set_xlabel('频率 (Hz)')
     axes[2, 0].set_ylabel('功率谱密度 (μV²/Hz)')
     axes[2, 0].grid(True, alpha=0.3)
     
     # 4. 最终滤波 PSD
-    psd_final = raw_final.compute_psd(fmin=0, fmax=50)
+    psd_final = raw_final.compute_psd(fmin=0, fmax=50, picks='eeg')
     psd_data_final, freqs_final = psd_final.get_data(return_freqs=True)
     axes[3, 0].plot(freqs_final, np.mean(psd_data_final, axis=0), linewidth=1, color='red')
-    axes[3, 0].set_title('最终滤波 PSD (8-30Hz)')
+    axes[3, 0].set_title('最终滤波 PSD (8-30Hz, EEG)')
     axes[3, 0].set_xlim(0, 50)
     axes[3, 0].set_xlabel('频率 (Hz)')
     axes[3, 0].set_ylabel('功率谱密度 (μV²/Hz)')
     axes[3, 0].grid(True, alpha=0.3)
     
-    # 5. 时域信号对比
+    # 5. 时域信号对比（自适应选择时间段）
     duration = 2  # 显示 2 秒
-    start_time = 10  # 从 10 秒开始
+    total_duration = raw_original.times[-1]
+    start_time = max(10, total_duration / 3)  # 至少从 10s 开始，或在数据的 1/3 处
+    start_time = min(start_time, total_duration - duration)  # 确保不会超出数据范围
+    
     start_sample = int(raw_original.info['sfreq'] * start_time)
     end_sample = start_sample + int(duration * raw_original.info['sfreq'])
     
     times = np.linspace(start_time, start_time + duration, end_sample - start_sample) * 1000  # ms
     
-    axes[0, 1].plot(times, raw_original.get_data()[0, start_sample:end_sample] * 1e6, 
+    # 【关键修复】确保提取的是 EEG 通道，避免索引 0 可能是 EOG
+    eeg_data_orig = raw_original.copy().pick_types(eeg=True).get_data()
+    eeg_data_ica = raw_ica_filtered.copy().pick_types(eeg=True).get_data()
+    eeg_data_clean = raw_clean.copy().pick_types(eeg=True).get_data()
+    eeg_data_final = raw_final.copy().pick_types(eeg=True).get_data()
+    
+    axes[0, 1].plot(times, eeg_data_orig[0, start_sample:end_sample] * 1e6, 
                      alpha=0.7, linewidth=0.5)
     axes[0, 1].set_title('原始信号 (通道 1)')
     axes[0, 1].set_xlabel('时间 (ms)')
     axes[0, 1].set_ylabel('幅度 (μV)')
     axes[0, 1].grid(True, alpha=0.3)
     
-    axes[1, 1].plot(times, raw_ica_filtered.get_data()[0, start_sample:end_sample] * 1e6, 
+    axes[1, 1].plot(times, eeg_data_ica[0, start_sample:end_sample] * 1e6, 
                      alpha=0.7, linewidth=0.5, color='orange')
     axes[1, 1].set_title('ICA 前滤波信号 (通道 1)')
     axes[1, 1].set_xlabel('时间 (ms)')
     axes[1, 1].grid(True, alpha=0.3)
     
-    axes[2, 1].plot(times, raw_clean.get_data()[0, start_sample:end_sample] * 1e6, 
+    axes[2, 1].plot(times, eeg_data_clean[0, start_sample:end_sample] * 1e6, 
                      alpha=0.7, linewidth=0.5, color='green')
     axes[2, 1].set_title('ICA 去噪后信号 (通道 1)')
     axes[2, 1].set_xlabel('时间 (ms)')
     axes[2, 1].grid(True, alpha=0.3)
     
-    axes[3, 1].plot(times, raw_final.get_data()[0, start_sample:end_sample] * 1e6, 
+    axes[3, 1].plot(times, eeg_data_final[0, start_sample:end_sample] * 1e6, 
                      alpha=0.7, linewidth=0.5, color='red')
     axes[3, 1].set_title('最终滤波信号 (8-30Hz, 通道 1)')
     axes[3, 1].set_xlabel('时间 (ms)')
@@ -617,12 +539,22 @@ def plot_preprocessing_comparison(raw_original, raw_ica_filtered, raw_clean, raw
     return fig
 
 
-def complete_preprocessing_pipeline(subject='A01T'):
+def complete_preprocessing_pipeline(
+    subject='A01T',
+    data_root=None,
+    raw=None,
+    config: EEGPipelineConfig = DEFAULT_CONFIG,
+    plot_comparison=True,
+):
     """
     完整预处理流程
     
     Args:
         subject: 被试 ID，如 'A01T'
+        data_root: GDF 数据根目录，默认为项目下 BCICIV_2a_gdf
+        raw: 已加载 Raw 对象；提供时不再从磁盘读取
+        config: 统一配置对象
+        plot_comparison: 是否绘制预处理对比图
     
     Returns:
         epochs_final: 预处理后的 Epochs 对象
@@ -635,7 +567,7 @@ def complete_preprocessing_pipeline(subject='A01T'):
     
     # 1. 获取已处理的原始数据（通道映射已完成）
     print("Step 1: 获取已映射通道的原始数据")
-    raw = get_modified_raw_data(subject=subject)
+    raw = get_modified_raw_data(subject=subject, data_root=data_root, raw=raw)
     print(f"✅ 原始数据加载完成，通道数：{len(raw.ch_names)}")
     
     # 🔧 关键新增：无需 BioSig，直接使用 MNE 方法
@@ -648,7 +580,7 @@ def complete_preprocessing_pipeline(subject='A01T'):
     print("\n" + "=" * 40)
     print("Step 2: ICA 前轻度滤波")
     print("=" * 40)
-    raw_ica_filtered = filter_for_ica(raw, l_freq=1.0, h_freq=40.0)
+    raw_ica_filtered = filter_for_ica(raw, l_freq=config.ica_l_freq, h_freq=config.ica_h_freq)
     
     # 3. ICA 分解
     print("\n" + "=" * 40)
@@ -660,19 +592,19 @@ def complete_preprocessing_pipeline(subject='A01T'):
     print("\n" + "=" * 40)
     print("Step 4: 检测并去除伪迹")
     print("=" * 40)
-    ica = detect_and_remove_artifacts(ica, raw_ica_filtered)
+    ica = detect_and_remove_artifacts(ica, raw_ica_filtered, save_path='./output_img/ica_eog_components.png')
     
-    # 5. 应用 ICA 去噪
+    # 5. 应用 ICA 去噪（在相同的滤波数据上应用）
     print("\n" + "=" * 40)
     print("Step 5: 应用 ICA 去噪")
     print("=" * 40)
-    raw_clean = apply_ica(ica, raw)
+    raw_clean = apply_ica(ica, raw_ica_filtered)
     
     # 6. 任务定制滤波（聚焦运动想象相关频段）
     print("\n" + "=" * 40)
     print("Step 6: 任务定制滤波")
     print("=" * 40)
-    raw_final = filter_for_task(raw_clean, l_freq=8.0, h_freq=30.0)
+    raw_final = filter_for_task(raw_clean, l_freq=config.task_l_freq, h_freq=config.task_h_freq)
     
     # 7. 重参考
     print("\n" + "=" * 40)
@@ -686,13 +618,18 @@ def complete_preprocessing_pipeline(subject='A01T'):
     print("=" * 40)
     
     # 使用 MNE 方法创建 epochs 并剔除伪迹
-    epochs_final = create_epochs_with_artifact_removal_mne(raw_final, tmin=0, tmax=4)
+    epochs_final = create_epochs_with_artifact_removal_mne(
+        raw_final,
+        tmin=config.epoch_tmin,
+        tmax=config.epoch_tmax,
+    )
     
     # 10. 可视化对比
     print("\n" + "=" * 40)
     print("Step 10: 可视化预处理效果")
     print("=" * 40)
-    plot_preprocessing_comparison(raw, raw_ica_filtered, raw_clean, raw_final)
+    if plot_comparison:
+        plot_preprocessing_comparison(raw, raw_ica_filtered, raw_clean, raw_final)
     
     print("\n" + "=" * 60)
     print("🎉 完整预处理流程完成！")
@@ -701,7 +638,7 @@ def complete_preprocessing_pipeline(subject='A01T'):
     print(f"   - 试次数：{len(epochs_final)}")
     print(f"   - 通道数：{len(epochs_final.ch_names)}")
     print(f"   - 时间点数：{epochs_final.get_data().shape[2]}")
-    print(f"   - 频段：8-30 Hz (运动想象相关)")
+    print(f"   - 频段：{config.task_l_freq:g}-{config.task_h_freq:g} Hz (运动想象相关)")
     
     return epochs_final, ica
 
